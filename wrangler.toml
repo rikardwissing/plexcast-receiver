@@ -1,0 +1,15 @@
+# Cloudflare Worker config for the P2P signalling mailbox (worker.js).
+# Deploy:
+#   npm i -g wrangler            # if you don't have it
+#   wrangler login               # your Cloudflare account
+#   wrangler kv namespace create SIGNAL
+#     -> paste the printed id below, replacing PUT_KV_ID_HERE
+#   wrangler deploy
+# The deploy prints your Worker URL, e.g. https://plexcast-signal.<you>.workers.dev
+name = "plexcast-signal"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+[[kv_namespaces]]
+binding = "SIGNAL"
+id = "PUT_KV_ID_HERE"
