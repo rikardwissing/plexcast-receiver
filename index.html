@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Plex Cast</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #000; color: #eee;
+    font: 15px -apple-system, system-ui, sans-serif; }
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  video { max-width: 100%; max-height: 100%; background: #000; }
+  video.hidden { display: none !important; }
+  #panel { text-align: center; padding: 24px; max-width: 420px; }
+  #panel h1 { font-size: 18px; font-weight: 600; margin: 0 0 8px; }
+  #status { color: #9aa; font-size: 13px; margin-top: 12px; min-height: 18px; }
+  .spinner { width: 34px; height: 34px; margin: 8px auto; border: 3px solid #333;
+    border-top-color: #58a6ff; border-radius: 50%; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #tap { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.6); font-size: 17px; cursor: pointer; z-index: 10; }
+  #tap.show { display: flex; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <video id="v" class="hidden" playsinline controls></video>
+    <div id="panel">
+      <div class="spinner"></div>
+      <h1>Connecting…</h1>
+      <div id="status">Reaching the phone</div>
+    </div>
+  </div>
+  <div id="tap">▶ Tap to start</div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  var qs = new URLSearchParams(location.search);
+  // room = share code; sig = signalling base URL (defaults to same origin, the
+  // LAN case where the phone itself serves this page and the mailbox).
+  var room = qs.get("room") || location.hash.replace(/^#/, "");
+  var sig = (qs.get("sig") || "").replace(/\/+$/, "");   // "" => same origin
+
+  var v = document.getElementById("v");
+  var panel = document.getElementById("panel");
+  var statusEl = document.getElementById("status");
+  var tap = document.getElementById("tap");
+  var h1 = panel.querySelector("h1");
+
+  function setStatus(main, sub) { if (main) h1.textContent = main; if (sub !== undefined) statusEl.textContent = sub; }
+  function showVideo() { v.classList.remove("hidden"); panel.style.display = "none"; }
+  function showPanel() { v.classList.add("hidden"); panel.style.display = ""; }
+  function fail(msg) { panel.querySelector(".spinner").style.display = "none"; setStatus("Can’t connect", msg); }
+
+  if (!room) { fail("Missing room code."); return; }
+
+  // ---- Signalling (tiny mailbox: GET offer, POST answer) --------------------
+  function sigURL(p) { return (sig || "") + p; }
+  async function getOffer() {
+    // Poll until the phone has published its offer.
+    for (var i = 0; i < 40; i++) {
+      try {
+        var r = await fetch(sigURL("/rtc/offer/" + encodeURIComponent(room)), { cache: "no-store" });
+        if (r.ok) { var t = (await r.text()).trim(); if (t) return t; }
+      } catch (e) {}
+      await new Promise(function (res) { setTimeout(res, 500); });
+    }
+    throw new Error("no offer");
+  }
+  async function postAnswer(blob) {
+    await fetch(sigURL("/rtc/answer/" + encodeURIComponent(room)), {
+      method: "POST", body: blob, headers: { "Content-Type": "text/plain" },
+    });
+  }
+
+  // ---- Data-channel request/response ----------------------------------------
+  // Requests are JSON {t:"req",id,path,start?,end?}; the phone replies with a
+  // JSON {t:"res",id,status,len,ctype} header then binary body chunks (4-byte
+  // LE id prefix), an empty-body chunk marking EOF. Multiple requests can be
+  // in flight; each is keyed by id.
+  var dc = null;
+  var reqId = 1;
+  var pending = {};   // id -> {resolve, reject, meta, chunks, got}
+
+  function channelReady() { return dc && dc.readyState === "open"; }
+
+  function fetchOverChannel(path, opts) {
+    opts = opts || {};
+    return new Promise(function (resolve, reject) {
+      if (!channelReady()) { reject(new Error("channel closed")); return; }
+      var id = reqId++;
+      pending[id] = { resolve: resolve, reject: reject, meta: null, chunks: [], got: 0 };
+      if (opts.onId) opts.onId(id);
+      var msg = { t: "req", id: id, path: path };
+      if (opts.start != null) msg.start = opts.start;
+      if (opts.end != null) msg.end = opts.end;
+      dc.send(JSON.stringify(msg));
+    });
+  }
+
+  // hls.js aborts the in-flight fragment on every seek; tell the phone so it
+  // stops streaming bytes we no longer want and can serve the new fragment now.
+  function cancelRequest(id) {
+    if (id == null) return;
+    if (pending[id]) { delete pending[id]; }
+    if (channelReady()) dc.send(JSON.stringify({ t: "abort", id: id }));
+  }
+
+  function onControl(obj) {
+    switch (obj.t) {
+      case "load": loadMedia(obj); break;
+      case "play": v.play().catch(function () {}); break;
+      case "pause": v.pause(); break;
+      case "seek": if (obj.time != null) { try { v.currentTime = obj.time; } catch (e) {} } break;
+      case "volume": if (obj.value != null) { try { v.volume = obj.value; } catch (e) {} } break;
+      case "stop": stopMedia(); break;
+      case "res": {
+        var p = pending[obj.id];
+        if (p) p.meta = obj;
+        break;
+      }
+      case "err": {
+        var pe = pending[obj.id];
+        if (pe) { delete pending[obj.id]; pe.reject(new Error("status " + obj.status)); }
+        break;
+      }
+    }
+  }
+
+  function onBody(buf) {
+    // 4-byte LE id + payload; empty payload = EOF.
+    var view = new DataView(buf);
+    if (buf.byteLength < 4) return;
+    var id = view.getUint32(0, true);
+    var p = pending[id];
+    if (!p) return;
+    if (buf.byteLength === 4) {
+      // EOF — assemble.
+      delete pending[id];
+      var total = p.got;
+      var out = new Uint8Array(total);
+      var off = 0;
+      for (var i = 0; i < p.chunks.length; i++) { out.set(p.chunks[i], off); off += p.chunks[i].length; }
+      p.resolve({ data: out, meta: p.meta });
+    } else {
+      var chunk = new Uint8Array(buf, 4);
+      p.chunks.push(chunk);
+      p.got += chunk.length;
+    }
+  }
+
+  // ---- hls.js loader over the data channel -----------------------------------
+  // The stats shape must match hls.js's LoadStats exactly — it reads/writes
+  // loading, parsing AND buffering timings; a missing `buffering` throws
+  // "Cannot read properties of undefined (reading 'start')" on every append.
+  function DataChannelLoader() { this.stats = { aborted: false, loaded: 0, total: 0,
+    retry: 0, chunkCount: 0, bwEstimate: 0, loading: { start: 0, first: 0, end: 0 },
+    parsing: { start: 0, end: 0 }, buffering: { start: 0, first: 0, end: 0 } }; }
+  DataChannelLoader.prototype.destroy = function () { cancelRequest(this._id); this._id = null; };
+  DataChannelLoader.prototype.abort = function () { this.stats.aborted = true; cancelRequest(this._id); this._id = null; };
+  DataChannelLoader.prototype.load = function (context, config, callbacks) {
+    var self = this;
+    this.context = context;
+    var path = context.url.replace(location.origin, "");
+    if (path.indexOf("http") === 0) { try { path = new URL(context.url).pathname; } catch (e) {} }
+    var opts = { onId: function (id) { self._id = id; } };
+    if (context.rangeStart != null) opts.start = context.rangeStart;
+    if (context.rangeEnd != null) opts.end = context.rangeEnd - 1;
+    this.stats.loading.start = performance.now();
+    fetchOverChannel(path, opts).then(function (r) {
+      self._id = null;
+      if (self.stats.aborted) return;
+      var now = performance.now();
+      self.stats.loading.first = now; self.stats.loading.end = now;
+      self.stats.loaded = self.stats.total = r.data.length;
+      var isText = context.responseType === "text" || /\.m3u8(\?|$)/i.test(path);
+      var data = isText ? new TextDecoder("utf-8").decode(r.data) : r.data.buffer;
+      var response = { url: context.url, data: data };
+      callbacks.onSuccess(response, self.stats, context, null);
+    }).catch(function (e) {
+      if (self.stats.aborted) return;
+      callbacks.onError({ code: 0, text: String(e) }, context, null, self.stats);
+    });
+  };
+
+  var hls = null;
+  function stopMedia() {
+    if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
+    v.pause(); v.removeAttribute("src"); v.load();
+    showPanel(); setStatus("Stopped", "");
+  }
+  function play() {
+    var pr = v.play();
+    if (pr && pr.catch) pr.catch(function () { tap.classList.add("show"); });
+  }
+  // Poster is served over the data channel too (no HTTP media server exists).
+  function setPoster(path) {
+    if (!path) return;
+    fetchOverChannel(path, {}).then(function (r) {
+      v.poster = URL.createObjectURL(new Blob([r.data], { type: (r.meta && r.meta.ctype) || "image/jpeg" }));
+    }).catch(function () {});
+  }
+  function loadMedia(m) {
+    stopMedia();
+    showVideo();
+    setPoster(m.poster);
+    var startTime = m.startTime || 0;
+    var isHls = /\.m3u8(\?|$)/i.test(m.url || "");
+    if (isHls) {
+      if (!window.Hls || !window.Hls.isSupported()) { fail("This browser can’t play the stream (no MSE)."); return; }
+      hls = new window.Hls({ loader: DataChannelLoader, enableWorker: false });
+      hls.loadSource(m.url);
+      hls.attachMedia(v);
+      hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
+        if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
+        play();
+      });
+      hls.on(window.Hls.Events.ERROR, function (evt, data) {
+        if (data && data.fatal) setStatus("Playback error", data.details || "");
+      });
+      return;
+    }
+    // A plain (non-package) file: WebRTC has no HTTP server to seek against, so
+    // pull the whole file over the data channel into a Blob. Works for anything
+    // the browser can play, but downloads fully first — a cast package (HLS)
+    // streams and seeks properly and is the right path for large files.
+    setStatus("Buffering…", "Downloading over the connection");
+    fetchOverChannel(m.url, {}).then(function (r) {
+      var blob = new Blob([r.data], { type: (r.meta && r.meta.ctype) || "video/mp4" });
+      v.src = URL.createObjectURL(blob);
+      v.addEventListener("loadedmetadata", function once() {
+        v.removeEventListener("loadedmetadata", once);
+        if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
+      });
+      play();
+    }).catch(function (e) { fail("Couldn’t load media: " + (e && e.message || e)); });
+  }
+
+  tap.addEventListener("click", function () { tap.classList.remove("show"); v.play().catch(function () {}); });
+
+  // ---- Status back to the phone ---------------------------------------------
+  function sendStatus(extra) {
+    if (!channelReady()) return;
+    var s = { t: "status", position: v.currentTime || 0, duration: v.duration || 0, paused: v.paused };
+    if (extra) for (var k in extra) s[k] = extra[k];
+    dc.send(JSON.stringify(s));
+  }
+  v.addEventListener("timeupdate", function () { sendStatus(); });
+  v.addEventListener("play", function () { sendStatus(); });
+  v.addEventListener("pause", function () { sendStatus(); });
+  v.addEventListener("ended", function () { sendStatus({ ended: true }); });
+
+  // ---- WebRTC answerer -------------------------------------------------------
+  function decode(blob) { var o = JSON.parse(atob(blob)); return o; }
+  function encode(desc) { return btoa(JSON.stringify({ type: desc.type, sdp: desc.sdp })); }
+
+  async function connect() {
+    var pc = new RTCPeerConnection({ iceServers: [{ urls: [
+      "stun:stun.l.google.com:19302",
+      "stun:stun1.l.google.com:19302",
+      "stun:stun2.l.google.com:19302",
+      "stun:stun.cloudflare.com:3478"
+    ] }] });
+    pc.ondatachannel = function (e) {
+      dc = e.channel;
+      dc.binaryType = "arraybuffer";
+      dc.onmessage = function (ev) {
+        if (typeof ev.data === "string") { try { onControl(JSON.parse(ev.data)); } catch (x) {} }
+        else onBody(ev.data);
+      };
+      dc.onopen = function () { setStatus("Connected", "Waiting for the phone to start a video…"); };
+      dc.onclose = function () { stopMedia(); setStatus("Disconnected", "The phone ended the session."); };
+    };
+    pc.onconnectionstatechange = function () {
+      if (pc.connectionState === "failed") fail("Couldn’t establish a direct connection (this network may need TURN).");
+    };
+
+    setStatus("Connecting…", "Fetching connection info");
+    var offerBlob = await getOffer();
+    await pc.setRemoteDescription(decode(offerBlob));
+    var answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    // Non-trickle: wait for ICE gathering to finish so the answer is complete.
+    await new Promise(function (res) {
+      if (pc.iceGatheringState === "complete") return res();
+      var t = setTimeout(res, 4000);
+      pc.onicegatheringstatechange = function () {
+        if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); }
+      };
+    });
+    setStatus("Connecting…", "Handing back the answer");
+    await postAnswer(encode(pc.localDescription));
+  }
+
+  connect().catch(function (e) { fail(String(e && e.message || e)); });
+})();
+</script>
+</body>
+</html>
