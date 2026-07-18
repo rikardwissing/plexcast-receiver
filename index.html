@@ -376,6 +376,26 @@
 
   tap.addEventListener("click", function () { tap.classList.remove("show"); v.play().catch(function () {}); });
 
+  // ---- A friendly "who's watching" label for the phone's UI -----------------
+  // Best-effort browser · OS from the user agent — nothing identifying.
+  function viewerLabel() {
+    var ua = navigator.userAgent || "";
+    var browser =
+      /Edg\//.test(ua) ? "Edge" :
+      /OPR\/|Opera/.test(ua) ? "Opera" :
+      /Firefox\//.test(ua) ? "Firefox" :
+      /Chrome\//.test(ua) ? "Chrome" :
+      /Safari\//.test(ua) ? "Safari" : "Browser";
+    var os =
+      /iPhone/.test(ua) ? "iPhone" :
+      /iPad/.test(ua) ? "iPad" :
+      /Android/.test(ua) ? "Android" :
+      /Mac OS X|Macintosh/.test(ua) ? "macOS" :
+      /Windows/.test(ua) ? "Windows" :
+      /Linux/.test(ua) ? "Linux" : "";
+    return os ? browser + " · " + os : browser;
+  }
+
   // ---- Status back to the phone ---------------------------------------------
   function sendStatus(extra) {
     if (!channelReady()) return;
@@ -406,7 +426,10 @@
         if (typeof ev.data === "string") { try { onControl(JSON.parse(ev.data)); } catch (x) {} }
         else onBody(ev.data);
       };
-      dc.onopen = function () { setStatus("Connected", "Waiting for the phone to start a video…"); };
+      dc.onopen = function () {
+        setStatus("Connected", "Waiting for the phone to start a video…");
+        try { dc.send(JSON.stringify({ t: "hello", label: viewerLabel() })); } catch (x) {}
+      };
       dc.onclose = function () { stopMedia(); setStatus("Disconnected", "The phone ended the session."); };
     };
     pc.onconnectionstatechange = function () {
