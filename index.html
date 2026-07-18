@@ -21,6 +21,17 @@
   #tap { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
     background: rgba(0,0,0,0.6); font-size: 17px; cursor: pointer; z-index: 10; }
   #tap.show { display: flex; }
+  #entry { text-align: center; padding: 24px; max-width: 420px; }
+  #entry h1 { font-size: 22px; font-weight: 600; margin: 0 0 6px; }
+  #entry p { color: #9aa; font-size: 14px; margin: 0 0 20px; }
+  #entry .row { display: flex; gap: 10px; justify-content: center; }
+  #code { width: 160px; font: 600 34px/1 ui-monospace, monospace; text-align: center;
+    letter-spacing: 8px; padding: 12px 8px; border-radius: 12px; border: 1px solid #444;
+    background: #111; color: #fff; }
+  #go { font-size: 17px; font-weight: 600; padding: 0 20px; border: 0; border-radius: 12px;
+    background: #58a6ff; color: #001; cursor: pointer; }
+  #go:active { opacity: 0.8; }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
@@ -31,6 +42,14 @@
       <h1>Connecting…</h1>
       <div id="status">Reaching the phone</div>
     </div>
+    <div id="entry" class="hidden">
+      <h1>Plex Cast</h1>
+      <p>Enter the code shown on your phone</p>
+      <div class="row">
+        <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" placeholder="0000">
+        <button id="go">Watch</button>
+      </div>
+    </div>
   </div>
   <div id="tap">▶ Tap to start</div>
 
@@ -39,23 +58,45 @@
 (function () {
   "use strict";
   var qs = new URLSearchParams(location.search);
-  // room = share code; sig = signalling base URL (defaults to same origin, the
-  // LAN case where the phone itself serves this page and the mailbox).
-  var room = qs.get("room") || location.hash.replace(/^#/, "");
-  var sig = (qs.get("sig") || "").replace(/\/+$/, "");   // "" => same origin
+  // sig = signalling mailbox; defaults to the app's built-in Worker so a plain
+  // link (page + #code) needs no query. room = the short code from the hash,
+  // ?room, or typed into the landing form.
+  var sig = (qs.get("sig") || "https://plexcast-signal.rikard-wissing.workers.dev").replace(/\/+$/, "");
+  var room = (qs.get("room") || location.hash.replace(/^#/, "")).trim();
 
   var v = document.getElementById("v");
   var panel = document.getElementById("panel");
+  var entry = document.getElementById("entry");
   var statusEl = document.getElementById("status");
   var tap = document.getElementById("tap");
   var h1 = panel.querySelector("h1");
 
   function setStatus(main, sub) { if (main) h1.textContent = main; if (sub !== undefined) statusEl.textContent = sub; }
-  function showVideo() { v.classList.remove("hidden"); panel.style.display = "none"; }
-  function showPanel() { v.classList.add("hidden"); panel.style.display = ""; }
-  function fail(msg) { panel.querySelector(".spinner").style.display = "none"; setStatus("Can’t connect", msg); }
+  function showVideo() { v.classList.remove("hidden"); panel.classList.add("hidden"); entry.classList.add("hidden"); }
+  function showPanel() { v.classList.add("hidden"); panel.classList.remove("hidden"); entry.classList.add("hidden"); }
+  function fail(msg) { showPanel(); panel.querySelector(".spinner").style.display = "none"; setStatus("Can’t connect", msg); }
 
-  if (!room) { fail("Missing room code."); return; }
+  // No code in the link → show the landing form so a code can be typed (e.g.
+  // straight on a TV browser).
+  if (!room) {
+    panel.classList.add("hidden");
+    entry.classList.remove("hidden");
+    var input = document.getElementById("code");
+    function submitCode() {
+      var v2 = (input.value || "").trim();
+      if (!v2) return;
+      room = v2;
+      entry.classList.add("hidden");
+      showPanel();
+      panel.querySelector(".spinner").style.display = "";
+      setStatus("Connecting…", "Reaching the phone");
+      connect().catch(function (e) { fail(String(e && e.message || e)); });
+    }
+    document.getElementById("go").addEventListener("click", submitCode);
+    input.addEventListener("keydown", function (e) { if (e.key === "Enter") submitCode(); });
+    try { input.focus(); } catch (e) {}
+    return;
+  }
 
   // ---- Signalling (tiny mailbox: GET offer, POST answer) --------------------
   function sigURL(p) { return (sig || "") + p; }
