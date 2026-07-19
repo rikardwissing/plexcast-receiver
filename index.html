@@ -219,6 +219,9 @@
   var dc = null;
   // Who we're connected to — replaced by the sender's "hi" (device name).
   var sender = "the sender";
+  // A channel opened at least once — turns later failures from "can't traverse
+  // NAT" advice into "lost the sender".
+  var wasConnected = false;
   var reqId = 1;
   var pending = {};   // id -> {resolve, reject, meta, chunks, got}
 
@@ -253,6 +256,7 @@
         // status texts can say who we're connected to, not assume "the phone".
         if (obj.sender) {
           sender = String(obj.sender).slice(0, 40);
+          window.PLEXCAST_SENDER = sender;   // observable for debugging/QA
           setStatus("Connected", "Waiting for " + sender + " to start a video…");
         }
         break;
@@ -437,13 +441,18 @@
         else onBody(ev.data);
       };
       dc.onopen = function () {
+        wasConnected = true;
         setStatus("Connected", "Waiting for " + sender + " to start a video…");
         try { dc.send(JSON.stringify({ t: "hello", label: viewerLabel() })); } catch (x) {}
       };
       dc.onclose = function () { stopMedia(); setStatus("Disconnected", "The session was ended by " + sender + "."); };
     };
     pc.onconnectionstatechange = function () {
-      if (pc.connectionState === "failed") fail("Couldn’t establish a direct connection (this network may need TURN).");
+      if (pc.connectionState !== "failed") return;
+      // Failing BEFORE a channel ever opened is a NAT-traversal problem; failing
+      // after means the sender vanished (app quit, network drop) — say that.
+      if (wasConnected) { stopMedia(); setStatus("Disconnected", "Lost the connection to " + sender + "."); }
+      else fail("Couldn’t establish a direct connection (this network may need TURN).");
     };
 
     setStatus("Connecting…", "Fetching connection info");
