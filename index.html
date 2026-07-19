@@ -336,11 +336,67 @@
   };
 
   var hls = null;
+  var stallTimer = null;
+  function clearStall() { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; } }
   function stopMedia() {
+    clearStall();
     if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
     v.pause(); v.removeAttribute("src"); v.load();
     showPanel(); setStatus("Stopped", "");
   }
+
+  // A decode/codec failure: swap the video for a visible explanation (the old
+  // path wrote to the hidden panel — an eternal spinner), and tell the sender
+  // so its UI can say why nothing is playing.
+  function playbackError(detail) {
+    clearStall();
+    if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
+    v.pause(); v.removeAttribute("src"); v.load();
+    showPanel(); setStatus("Can’t play this", detail);
+    try { if (channelReady()) dc.send(JSON.stringify({ t: "cantplay", reason: detail })); } catch (x) {}
+  }
+
+  // Friendly names for the codecs that actually bite in browsers.
+  function codecName(c) {
+    c = String(c || "").toLowerCase();
+    if (c.indexOf("ec-3") === 0) return "E-AC-3 (Dolby Digital Plus)";
+    if (c.indexOf("ac-3") === 0) return "AC-3 (Dolby Digital)";
+    if (c.indexOf("dts") === 0) return "DTS";
+    if (c.indexOf("mlp") === 0 || c.indexOf("truehd") >= 0) return "TrueHD";
+    if (c.indexOf("hev") === 0 || c.indexOf("hvc") === 0) return "HEVC";
+    if (c.indexOf("av01") === 0) return "AV1";
+    return c;
+  }
+  // ?deny=ec-3,aac forces codecs to test the error path without special media.
+  var denied = (qs.get("deny") || "").toLowerCase().split(",").filter(Boolean);
+  function canPlay(kind, codec) {
+    if (!codec) return true;
+    var c = String(codec).toLowerCase();
+    for (var i = 0; i < denied.length; i++) if (c.indexOf(denied[i]) === 0) return false;
+    try {
+      return window.MediaSource
+        ? MediaSource.isTypeSupported(kind + '/mp4; codecs="' + codec + '"')
+        : v.canPlayType(kind + '/mp4; codecs="' + codec + '"') !== "";
+    } catch (e) { return true; }
+  }
+
+  // The net under everything: if nothing decodes within 15s of starting, the
+  // format is (in practice) unplayable — say so instead of spinning forever.
+  function armStall() {
+    clearStall();
+    stallTimer = setTimeout(function () {
+      if (v.readyState < 2) {
+        playbackError("Nothing is decoding — this format may be unsupported by the browser.");
+      }
+    }, 15000);
+  }
+  v.addEventListener("loadeddata", clearStall);
+  v.addEventListener("error", function () {
+    if (!v.getAttribute("src") && !hls) return;   // teardown noise
+    var err = v.error;
+    playbackError("The browser reported a media error" +
+                  (err && err.message ? ": " + err.message : "") + ".");
+  });
   function play() {
     var pr = v.play();
     if (pr && pr.catch) pr.catch(function () { tap.classList.add("show"); });
@@ -363,12 +419,47 @@
       hls = new window.Hls({ loader: DataChannelLoader, enableWorker: false });
       hls.loadSource(m.url);
       hls.attachMedia(v);
-      hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
+      hls.on(window.Hls.Events.MANIFEST_PARSED, function (evt, data) {
+        // Check what the manifest declares BEFORE playing — an unsupported
+        // codec (E-AC-3 audio is the classic) otherwise loads forever.
+        var levels = (data && data.levels) || [];
+        for (var i = 0; i < levels.length; i++) {
+          var vc = levels[i].videoCodec;
+          if (vc && !canPlay("video", vc)) {
+            playbackError("This browser can’t decode the video: " + codecName(vc) + ".");
+            return;
+          }
+        }
+        var atracks = (hls && hls.audioTracks) || [];
+        var anyAudioPlays = atracks.length === 0;
+        var badAudio = null;
+        for (var j = 0; j < atracks.length; j++) {
+          var ac = atracks[j].audioCodec;
+          if (!ac || canPlay("audio", ac)) { anyAudioPlays = true; } else { badAudio = ac; }
+        }
+        // No audio in the tracks list can still mean muxed audio on the level.
+        for (var k = 0; k < levels.length; k++) {
+          var lac = levels[k].audioCodec;
+          if (lac) { if (canPlay("audio", lac)) { anyAudioPlays = true; } else { badAudio = lac; } }
+        }
+        if (!anyAudioPlays && badAudio) {
+          playbackError("This browser can’t decode the audio: " + codecName(badAudio) +
+                        ". Convert the file (compatible audio) and cast again.");
+          return;
+        }
         if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
+        armStall();
         play();
       });
       hls.on(window.Hls.Events.ERROR, function (evt, data) {
-        if (data && data.fatal) setStatus("Playback error", data.details || "");
+        if (!data || !data.fatal) return;
+        var codec = (data.mimeType || "").replace(/^.*codecs="?([^";]+)"?.*$/, "$1");
+        if (/bufferAddCodecError|bufferIncompatibleCodecsError|manifestIncompatibleCodecsError/.test(data.details || "")) {
+          playbackError("This browser can’t decode this format" +
+                        (codec ? ": " + codecName(codec) : "") + ".");
+        } else {
+          playbackError("Playback failed (" + (data.details || data.type || "unknown") + ").");
+        }
       });
       return;
     }
@@ -384,6 +475,7 @@
         v.removeEventListener("loadedmetadata", once);
         if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
       });
+      armStall();
       play();
     }).catch(function (e) { fail("Couldn’t load media: " + (e && e.message || e)); });
   }
