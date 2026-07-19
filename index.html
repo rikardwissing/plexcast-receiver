@@ -702,7 +702,13 @@
       dc.onopen = function () {
         wasConnected = true;
         setStatus("Connected", "Waiting for " + sender + " to start a video…");
-        try { dc.send(JSON.stringify({ t: "hello", label: viewerLabel() })); } catch (x) {}
+        // The hello carries the pairing tokens this browser holds, so a sender
+        // that already knows one recognises us and reuses it — connecting with
+        // a fresh code doesn't create a duplicate pairing on either end.
+        try {
+          dc.send(JSON.stringify({ t: "hello", label: viewerLabel(),
+                                   pairings: loadPairs().map(function (p) { return p.id; }) }));
+        } catch (x) {}
       };
       dc.onclose = function () { stopMedia(); setStatus("Disconnected", "The session was ended by " + sender + "."); };
     };
