@@ -648,6 +648,7 @@
       };
       dc.onclose = function () { stopMedia(); setStatus("Disconnected", "The session was ended by " + sender + "."); };
     };
+    window.PAGEPC = pc;   // QA observable
     window.PLEXCAST_ICE_LOG = window.PLEXCAST_ICE_LOG || [];
     pc.oniceconnectionstatechange = function () {
       window.PLEXCAST_ICE_LOG.push(Date.now() % 100000 + " ice:" + pc.iceConnectionState);
