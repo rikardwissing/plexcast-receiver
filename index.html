@@ -82,6 +82,23 @@
     z-index: 10; cursor: pointer; }
   #tap.show { display: flex; }
   #tap .btn { width: auto; padding: 0 32px; }
+
+  /* Paired senders on the landing: we're listening for their casts. */
+  #pairs { margin: -8px 0 22px; text-align: left; }
+  #pairs .pairhead { font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--muted); font-weight: 700; margin: 0 0 8px; text-align: center; }
+  .pairrow { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    border-radius: 14px; background: rgba(255,255,255,0.045);
+    border: 1px solid rgba(255,255,255,0.08); margin-bottom: 8px; }
+  .pairrow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+    animation: pulse 1.6s ease-in-out infinite; flex: none; }
+  @keyframes pulse { 50% { opacity: 0.25; } }
+  .pairrow .name { flex: 1; font-size: 15px; font-weight: 600; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pairrow .hint { color: var(--muted); font-size: 12px; flex: none; }
+  .pairrow .forget { flex: none; border: 0; background: transparent; color: var(--muted);
+    font-size: 17px; cursor: pointer; padding: 2px 6px; border-radius: 8px; }
+  .pairrow .forget:hover { color: var(--ink); background: rgba(255,255,255,0.08); }
 </style>
 </head>
 <body>
@@ -117,6 +134,7 @@
       <p class="wordmark">Plex Cast</p>
       <h1>Enter your code</h1>
       <p class="sub">Type the 4-digit code shown in the app.</p>
+      <div id="pairs" class="hidden"></div>
       <div class="otp" id="otp">
         <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
         <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code" aria-label="Cast code">
@@ -151,6 +169,38 @@
     panel.querySelector(".spinner").style.display = ""; }
   function fail(msg) { showPanel(); panel.querySelector(".spinner").style.display = "none"; setStatus("Can’t connect", msg); }
 
+  // ---- Pairing: remember senders so they can cast here without a code -------
+  // A pairing is {id, name}: the id is a long token the sender minted; it's
+  // also the mailbox room a paired cast arrives on. While this page is open we
+  // (a) beacon presence so the sender's menu shows us online, and (b) listen
+  // on each pairing for an incoming offer.
+  var PAIRS_KEY = "plexcast.pairs";
+  function loadPairs() {
+    try { return JSON.parse(localStorage.getItem(PAIRS_KEY) || "[]"); } catch (e) { return []; }
+  }
+  function savePairs(list) { try { localStorage.setItem(PAIRS_KEY, JSON.stringify(list)); } catch (e) {} }
+  function rememberPair(id, name) {
+    if (!id) return;
+    var list = loadPairs().filter(function (p) { return p.id !== id; });
+    list.unshift({ id: String(id).slice(0, 64), name: String(name || "A device").slice(0, 40) });
+    savePairs(list.slice(0, 8));
+  }
+  function forgetPair(id) { savePairs(loadPairs().filter(function (p) { return p.id !== id; })); }
+
+  // Presence: a tiny beacon under `offer/p-<id>` (reuses the mailbox routes, so
+  // no Worker changes). TTL is 5 min; refresh every 4 while the page is open.
+  function beaconPresence() {
+    loadPairs().forEach(function (p) {
+      try {
+        fetch(sigURL("/rtc/offer/p-" + encodeURIComponent(p.id)), {
+          method: "PUT", body: "1", headers: { "Content-Type": "text/plain" },
+        }).catch(function () {});
+      } catch (e) {}
+    });
+  }
+  beaconPresence();
+  setInterval(beaconPresence, 240000);
+
   // No code in the link → show the landing form so a code can be typed straight
   // on a TV. Four cells over one hidden input; auto-submits on the 4th digit.
   if (!room) {
@@ -180,7 +230,7 @@
       room = val;
       showPanel();
       setStatus("Connecting…", "Reaching the sender");
-      connect().catch(function (e) { fail(String(e && e.message || e)); });
+      start(1);   // same self-healing handshake as a deep link
     }
     input.addEventListener("input", render);
     input.addEventListener("focus", render);
@@ -189,6 +239,54 @@
     document.getElementById("otp").addEventListener("click", function () { try { input.focus(); } catch (e) {} });
     try { input.focus(); } catch (e) {}
     render();
+
+    // Paired senders: list them and listen — when one starts a cast to us, its
+    // offer appears under the pairing token and we connect, no code needed.
+    var pairsEl = document.getElementById("pairs");
+    function renderPairs() {
+      var pairs = loadPairs();
+      pairsEl.classList.toggle("hidden", pairs.length === 0);
+      pairsEl.innerHTML = pairs.length
+        ? '<p class="pairhead">Ready to receive from</p>' : "";
+      pairs.forEach(function (p) {
+        var row = document.createElement("div");
+        row.className = "pairrow";
+        var dot = document.createElement("span"); dot.className = "dot";
+        var name = document.createElement("span"); name.className = "name"; name.textContent = p.name;
+        var hint = document.createElement("span"); hint.className = "hint"; hint.textContent = "listening…";
+        var x = document.createElement("button"); x.className = "forget"; x.textContent = "×";
+        x.title = "Forget this device";
+        x.addEventListener("click", function () { forgetPair(p.id); renderPairs(); });
+        row.appendChild(dot); row.appendChild(name); row.appendChild(hint); row.appendChild(x);
+        pairsEl.appendChild(row);
+      });
+    }
+    renderPairs();
+
+    (function listen() {
+      if (submitted) return;                       // a code took over
+      var pairs = loadPairs();
+      var waiting = pairs.length;
+      if (!waiting) { setTimeout(listen, 3000); return; }
+      var done = false;
+      pairs.forEach(function (p) {
+        fetch(sigURL("/rtc/offer/" + encodeURIComponent(p.id)), { cache: "no-store" })
+          .then(function (r) { return r.ok ? r.text() : ""; })
+          .then(function (t) {
+            if (done || submitted) return;
+            if ((t || "").trim()) {
+              done = true; submitted = true;
+              room = p.id;
+              showPanel();
+              setStatus("Connecting…", "Answering " + p.name);
+              start(1);
+            } else if (--waiting === 0 && !done) {
+              setTimeout(listen, 3000);
+            }
+          })
+          .catch(function () { if (--waiting === 0 && !done && !submitted) setTimeout(listen, 3000); });
+      });
+    })();
     return;
   }
 
@@ -260,6 +358,12 @@
           window.PLEXCAST_SENDER = sender;   // observable for debugging/QA
           setStatus("Connected", "Waiting for " + sender + " to start a video…");
         }
+        break;
+      case "pair":
+        // The sender hands us a pairing token: remember it so this browser can
+        // receive future casts from that device without a code.
+        rememberPair(obj.id, obj.name || sender);
+        window.PLEXCAST_PAIRED = obj.id;   // observable for debugging/QA
         break;
       case "load": loadMedia(obj); break;
       case "play": v.play().catch(function () {}); break;
