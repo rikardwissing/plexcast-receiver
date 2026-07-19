@@ -148,7 +148,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 3;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 4;   // bump when debugging cached-page confusion
   var qs = new URLSearchParams(location.search);
   // sig = signalling mailbox; defaults to the app's built-in Worker so a plain
   // link (page + #code) needs no query. room = the short code from the hash,
@@ -160,6 +160,26 @@
   var panel = document.getElementById("panel");
   var entry = document.getElementById("entry");
   var statusEl = document.getElementById("status");
+
+  // ---- Shared connect state ---------------------------------------------------
+  // Declared ABOVE the code-entry landing's early return: the landing path uses
+  // these too (its paired listener answers offers), and `var` hoisting would
+  // otherwise leave them undefined there — a silently-swallowed TypeError.
+  var dc = null;
+  // Who we're connected to — replaced by the sender's "hi" (device name).
+  var sender = "the sender";
+  // A channel opened at least once — turns later failures from "can't traverse
+  // NAT" advice into "lost the sender".
+  var wasConnected = false;
+  // Offers we answered that nobody consumed (the sender quit with them inside
+  // their TTL) — keyed by room, so the listen loop skips the same corpse.
+  var staleOffers = {};
+  // Set by the landing: puts the page back into paired-listening after an
+  // orphaned answer. Null on code/deep-link sessions.
+  var resumeListening = null;
+  // QA trace of the connect state machine (timestamped one-liners).
+  window.PLEXCAST_TRACE = [];
+  function trace(s) { window.PLEXCAST_TRACE.push(Math.round(performance.now()/1000) + "s " + s); }
   var tap = document.getElementById("tap");
   var h1 = panel.querySelector("h1");
 
@@ -263,30 +283,59 @@
     }
     renderPairs();
 
-    (function listen() {
-      if (submitted) return;                       // a code took over
+    // After an orphaned answer (a corpse offer, nobody reading), come back
+    // here: show the landing again and keep listening for a REAL cast.
+    resumeListening = function () {
+      submitted = false;
+      room = "";
+      panel.classList.add("hidden");
+      entry.classList.remove("hidden");
+      renderPairs();
+    };
+
+    // One polling round across all pairings; the first live offer wins.
+    var pollBusy = false;
+    function pollPairsOnce() {
+      window.PLEXCAST_POLLS = (window.PLEXCAST_POLLS || 0) + 1;   // QA observable
+      window.PLEXCAST_POLLSTATE = { submitted: submitted, busy: pollBusy };
+      if (submitted || pollBusy) return;
       var pairs = loadPairs();
-      var waiting = pairs.length;
-      if (!waiting) { setTimeout(listen, 3000); return; }
-      var done = false;
+      if (!pairs.length) return;
+      pollBusy = true;
+      var waiting = pairs.length, done = false;
       pairs.forEach(function (p) {
         fetch(sigURL("/rtc/offer/" + encodeURIComponent(p.id)), { cache: "no-store" })
           .then(function (r) { return r.ok ? r.text() : ""; })
           .then(function (t) {
-            if (done || submitted) return;
-            if ((t || "").trim()) {
-              done = true; submitted = true;
+            window.PLEXCAST_POLLT = (t || "").slice(0, 16) + " len=" + (t || "").length;   // QA
+            if (done || submitted) { if (--waiting === 0) pollBusy = false; return; }
+            t = (t || "").trim();
+            if (t && t === staleOffers[p.id]) { trace("poll: skip stale corpse"); t = ""; }
+            if (t) {
+              trace("poll: offer found — answering");
+              done = true; submitted = true; pollBusy = false;
               room = p.id;
               showPanel();
               setStatus("Connecting…", "Answering " + p.name);
               start(1);
-            } else if (--waiting === 0 && !done) {
-              setTimeout(listen, 3000);
+            } else if (--waiting === 0) {
+              pollBusy = false;
             }
           })
-          .catch(function () { if (--waiting === 0 && !done && !submitted) setTimeout(listen, 3000); });
+          .catch(function () { if (--waiting === 0) pollBusy = false; });
       });
-    })();
+    }
+    // A background receiver tab is the NORMAL case — and hidden tabs get their
+    // timers throttled to ~1/minute, which would make "listening…" a lie.
+    // Worker timers are exempt, so the tick comes from a tiny inline Worker.
+    try {
+      var tickSrc = URL.createObjectURL(new Blob(["setInterval(function(){postMessage(1)},3000)"],
+                                                 { type: "text/javascript" }));
+      new Worker(tickSrc).onmessage = pollPairsOnce;
+    } catch (e) {
+      setInterval(pollPairsOnce, 3000);   // best effort where workers can't run
+    }
+    pollPairsOnce();
     return;
   }
 
@@ -315,12 +364,6 @@
   // JSON {t:"res",id,status,len,ctype} header then binary body chunks (4-byte
   // LE id prefix), an empty-body chunk marking EOF. Multiple requests can be
   // in flight; each is keyed by id.
-  var dc = null;
-  // Who we're connected to — replaced by the sender's "hi" (device name).
-  var sender = "the sender";
-  // A channel opened at least once — turns later failures from "can't traverse
-  // NAT" advice into "lost the sender".
-  var wasConnected = false;
   var reqId = 1;
   var pending = {};   // id -> {resolve, reject, meta, chunks, got}
 
@@ -664,6 +707,7 @@
 
     setStatus("Connecting…", "Fetching connection info");
     var offerBlob = await getOffer();
+    trace("getOffer ok len=" + offerBlob.length);
     await pc.setRemoteDescription(decode(offerBlob));
     var answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
@@ -678,12 +722,33 @@
     });
     setStatus("Connecting…", "Handing back the answer");
     await postAnswer(encode(pc.localDescription));
+    trace("answer posted for room " + room.slice(0,8));
 
-    // Self-heal: if the channel doesn't open in time, this answer went to a
-    // dead offer (e.g. we reconnected before the sender re-armed). Tear down
-    // and run the whole handshake again — the fresh offer will be up by then.
-    await new Promise(function (res) { setTimeout(res, 12000); });
+    // A live sender polls the answer slot every ~1.6s. If our answer is still
+    // sitting there after 6s, nobody's listening — the offer we answered is an
+    // orphan (the sender quit with it inside its TTL). Abandon it and remember
+    // the blob so the listen loop doesn't answer the same corpse again.
+    await new Promise(function (res) { setTimeout(res, 6000); });
     if (!wasConnected) {
+      var leftover = "";
+      try {
+        var lr = await fetch(sigURL("/rtc/answer/" + encodeURIComponent(room)), { cache: "no-store" });
+        if (lr.ok) leftover = (await lr.text()).trim();
+      } catch (e) {}
+      if (leftover) {
+        trace("orphan: answer never consumed — marking offer stale");
+        try { pc.close(); } catch (x) {}
+        dc = null;
+        staleOffers[room] = offerBlob;
+        throw { orphan: true };
+      }
+    }
+    // The answer was consumed — give ICE the rest of the window, then the
+    // usual self-heal: tear down and rerun the handshake (a mid-rearm race;
+    // the fresh offer will be up by then).
+    await new Promise(function (res) { setTimeout(res, 6000); });
+    if (!wasConnected) {
+      trace("retry: answer consumed but ICE never connected");
       try { pc.close(); } catch (x) {}
       dc = null;
       throw { retry: true };
@@ -692,7 +757,15 @@
 
   function start(attempt) {
     connect().catch(function (e) {
-      if (e && e.retry && attempt < 4) {
+      if (e && e.orphan) {
+        // Nobody was listening for our answer. A paired page goes back to
+        // listening (a real cast publishes a FRESH offer we'll pick up); a
+        // code session tells the user to start over.
+        if (resumeListening) { resumeListening(); }
+        else fail(sender !== "the sender"
+                  ? sender + " isn’t casting right now. Start the cast again in the app."
+                  : "The sender isn’t responding. Start the cast again in the app.");
+      } else if (e && e.retry && attempt < 4) {
         setStatus("Connecting…", "Trying again…");
         start(attempt + 1);
       } else {
