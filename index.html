@@ -130,6 +130,7 @@
 <script>
 (function () {
   "use strict";
+  window.PLEXCAST_VERSION = 3;   // bump when debugging cached-page confusion
   var qs = new URLSearchParams(location.search);
   // sig = signalling mailbox; defaults to the app's built-in Worker so a plain
   // link (page + #code) needs no query. room = the short code from the hash,
@@ -434,6 +435,7 @@
         for (i = 0; i < atracks.length; i++) {
           if (atracks[i].audioCodec) audio.push(atracks[i].audioCodec);
         }
+        window.PLEXCAST_CODECS = { video: video.slice(), audio: audio.slice() };   // QA observable
         function verdict(kind, list) {
           if (!list.length) return null;
           for (var n = 0; n < list.length; n++) if (canPlay(kind, list[n])) return null;
