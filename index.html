@@ -166,6 +166,9 @@
   // these too (its paired listener answers offers), and `var` hoisting would
   // otherwise leave them undefined there — a silently-swallowed TypeError.
   var dc = null;
+  // The sender's load generation for the media currently loaded — echoed in
+  // status so the sender can discard a stale (previous-load) report.
+  var currentGen = 0;
   // Who we're connected to — replaced by the sender's "hi" (device name).
   var sender = "the sender";
   // A channel opened at least once — turns later failures from "can't traverse
@@ -593,7 +596,8 @@
     }).catch(function () {});
   }
   function loadMedia(m) {
-    stopMedia();
+    stopMedia();                 // pauses the old media → a final OLD-gen status
+    currentGen = m.gen || 0;     // now the current load; new statuses carry this
     showVideo();
     setPoster(m.poster);
     var startTime = m.startTime || 0;
@@ -693,7 +697,10 @@
   // ---- Status back to the phone ---------------------------------------------
   function sendStatus(extra) {
     if (!channelReady()) return;
-    var s = { t: "status", position: v.currentTime || 0, duration: v.duration || 0, paused: v.paused };
+    // Tag with the load generation: when a new load pauses the old media it
+    // fires one last status carrying the OLD duration — the sender ignores any
+    // status whose gen isn't the current load, so its loader doesn't vanish.
+    var s = { t: "status", gen: currentGen, position: v.currentTime || 0, duration: v.duration || 0, paused: v.paused };
     if (extra) for (var k in extra) s[k] = extra[k];
     dc.send(JSON.stringify(s));
   }
