@@ -177,6 +177,23 @@
   // Set by the landing: puts the page back into paired-listening after an
   // orphaned answer. Null on code/deep-link sessions.
   var resumeListening = null;
+  // Debounce so the data-channel close and the connection-failed event (both
+  // fire on a drop) only tear down once.
+  var disconnecting = false;
+  // The connection dropped after being live — return to listening so a paired
+  // browser is a castable device again (and the sender's re-arm is picked up
+  // by the pairing poll). Deep-link sessions have no landing listener, so
+  // reload bare: the page lands on its pairings (or the code entry).
+  function returnToListening() {
+    if (disconnecting) return;
+    disconnecting = true;
+    stopMedia();
+    try { if (window.PAGEPC) window.PAGEPC.close(); } catch (e) {}
+    dc = null;
+    wasConnected = false;
+    if (resumeListening) resumeListening();
+    else location.href = location.pathname;
+  }
   // QA trace of the connect state machine (timestamped one-liners).
   window.PLEXCAST_TRACE = [];
   function trace(s) { window.PLEXCAST_TRACE.push(Math.round(performance.now()/1000) + "s " + s); }
@@ -690,6 +707,7 @@
   function encode(desc) { return btoa(JSON.stringify({ type: desc.type, sdp: desc.sdp })); }
 
   async function connect() {
+    disconnecting = false;   // fresh attempt — arm the drop handler again
     var pc = new RTCPeerConnection({ iceServers: [{ urls: [
       "stun:stun.l.google.com:19302",
       "stun:stun1.l.google.com:19302",
@@ -714,7 +732,7 @@
                                    pairings: loadPairs().map(function (p) { return p.id; }) }));
         } catch (x) {}
       };
-      dc.onclose = function () { stopMedia(); setStatus("Disconnected", "The session was ended by " + sender + "."); };
+      dc.onclose = function () { returnToListening(); };
     };
     window.PAGEPC = pc;   // QA observable
     window.PLEXCAST_ICE_LOG = window.PLEXCAST_ICE_LOG || [];
@@ -725,8 +743,9 @@
       window.PLEXCAST_ICE_LOG.push(Date.now() % 100000 + " conn:" + pc.connectionState);
       if (pc.connectionState !== "failed") return;
       // Failing BEFORE a channel ever opened is a NAT-traversal problem; failing
-      // after means the sender vanished (app quit, network drop) — say that.
-      if (wasConnected) { stopMedia(); setStatus("Disconnected", "Lost the connection to " + sender + "."); }
+      // after means the sender vanished (app quit, network drop) — go back to
+      // listening so we're castable again.
+      if (wasConnected) returnToListening();
       else fail("Couldn’t establish a direct connection (this network may need TURN).");
     };
 
