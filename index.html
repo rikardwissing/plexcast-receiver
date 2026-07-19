@@ -351,7 +351,11 @@
       setInterval(pollPairsOnce, 3000);   // best effort where workers can't run
     }
     pollPairsOnce();
-    return;
+    // NB: no early return — the whole script (data-channel machinery, the
+    // tap-to-start handler, stall/error listeners) must still be defined for a
+    // session that begins here (typed code or paired listen). submitCode /
+    // pollPairsOnce call start() themselves; the deep-link auto-start at the
+    // bottom is guarded on `room`.
   }
 
   // ---- Signalling (tiny mailbox: GET offer, POST answer) --------------------
@@ -794,7 +798,9 @@
       }
     });
   }
-  start(1);
+  // A deep link (#code / ?room=) connects straight away; a landing session
+  // (typed code or paired listen) starts itself once it has a room.
+  if (room) start(1);
 })();
 </script>
 </body>
