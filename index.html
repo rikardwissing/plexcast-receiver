@@ -421,28 +421,31 @@
       hls.attachMedia(v);
       hls.on(window.Hls.Events.MANIFEST_PARSED, function (evt, data) {
         // Check what the manifest declares BEFORE playing — an unsupported
-        // codec (E-AC-3 audio is the classic) otherwise loads forever.
+        // codec (E-AC-3 audio is the classic) otherwise loads forever. Codecs
+        // the manifest doesn't declare are neutral: error only when at least
+        // one codec of a kind is declared and NONE of them are playable.
         var levels = (data && data.levels) || [];
-        for (var i = 0; i < levels.length; i++) {
-          var vc = levels[i].videoCodec;
-          if (vc && !canPlay("video", vc)) {
-            playbackError("This browser can’t decode the video: " + codecName(vc) + ".");
-            return;
-          }
-        }
         var atracks = (hls && hls.audioTracks) || [];
-        var anyAudioPlays = atracks.length === 0;
-        var badAudio = null;
-        for (var j = 0; j < atracks.length; j++) {
-          var ac = atracks[j].audioCodec;
-          if (!ac || canPlay("audio", ac)) { anyAudioPlays = true; } else { badAudio = ac; }
+        var video = [], audio = [], i;
+        for (i = 0; i < levels.length; i++) {
+          if (levels[i].videoCodec) video.push(levels[i].videoCodec);
+          if (levels[i].audioCodec) audio.push(levels[i].audioCodec);
         }
-        // No audio in the tracks list can still mean muxed audio on the level.
-        for (var k = 0; k < levels.length; k++) {
-          var lac = levels[k].audioCodec;
-          if (lac) { if (canPlay("audio", lac)) { anyAudioPlays = true; } else { badAudio = lac; } }
+        for (i = 0; i < atracks.length; i++) {
+          if (atracks[i].audioCodec) audio.push(atracks[i].audioCodec);
         }
-        if (!anyAudioPlays && badAudio) {
+        function verdict(kind, list) {
+          if (!list.length) return null;
+          for (var n = 0; n < list.length; n++) if (canPlay(kind, list[n])) return null;
+          return list[0];
+        }
+        var badVideo = verdict("video", video);
+        if (badVideo) {
+          playbackError("This browser can’t decode the video: " + codecName(badVideo) + ".");
+          return;
+        }
+        var badAudio = verdict("audio", audio);
+        if (badAudio) {
           playbackError("This browser can’t decode the audio: " + codecName(badAudio) +
                         ". Convert the file (compatible audio) and cast again.");
           return;
