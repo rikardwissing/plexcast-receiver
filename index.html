@@ -208,18 +208,29 @@
   function forgetPair(id) { savePairs(loadPairs().filter(function (p) { return p.id !== id; })); }
 
   // Presence: a tiny beacon under `offer/p-<id>` (reuses the mailbox routes, so
-  // no Worker changes). TTL is 5 min; refresh every 4 while the page is open.
-  function beaconPresence() {
+  // no Worker changes; TTL 5 min, refreshed every 4). The sender lists a paired
+  // device ONLY while its beacon is fresh, so presence must mean "actually
+  // listening": set while the landing listens, cleared the moment the page
+  // answers a cast, types a code, or goes away.
+  var listeningHere = false;
+  function beaconPresence(state) {
+    if (state !== undefined) listeningHere = state;
     loadPairs().forEach(function (p) {
+      var url = sigURL("/rtc/offer/p-" + encodeURIComponent(p.id));
       try {
-        fetch(sigURL("/rtc/offer/p-" + encodeURIComponent(p.id)), {
-          method: "PUT", body: "1", headers: { "Content-Type": "text/plain" },
-        }).catch(function () {});
+        fetch(url, { method: "PUT", body: listeningHere ? "1" : "",
+                     headers: { "Content-Type": "text/plain" }, keepalive: true })
+          .catch(function () {});
       } catch (e) {}
     });
   }
-  beaconPresence();
-  setInterval(beaconPresence, 240000);
+  setInterval(function () { if (listeningHere) beaconPresence(); }, 240000);
+  // Tab closing/navigating away: withdraw presence (sendBeacon survives unload).
+  window.addEventListener("pagehide", function () {
+    loadPairs().forEach(function (p) {
+      try { navigator.sendBeacon(sigURL("/rtc/offer/p-" + encodeURIComponent(p.id)), ""); } catch (e) {}
+    });
+  });
 
   // No code in the link → show the landing form so a code can be typed straight
   // on a TV. Four cells over one hidden input; auto-submits on the 4th digit.
@@ -247,6 +258,7 @@
       var val = (input.value || "").trim();
       if (val.length < 4 || submitted) return;
       submitted = true;
+      beaconPresence(false);   // no longer listening for paired casts
       room = val;
       showPanel();
       setStatus("Connecting…", "Reaching the sender");
@@ -282,6 +294,7 @@
       });
     }
     renderPairs();
+    beaconPresence(true);   // the landing is listening — senders may list us
 
     // After an orphaned answer (a corpse offer, nobody reading), come back
     // here: show the landing again and keep listening for a REAL cast.
@@ -291,6 +304,7 @@
       panel.classList.add("hidden");
       entry.classList.remove("hidden");
       renderPairs();
+      beaconPresence(true);
     };
 
     // One polling round across all pairings; the first live offer wins.
@@ -314,6 +328,7 @@
             if (t) {
               trace("poll: offer found — answering");
               done = true; submitted = true; pollBusy = false;
+              beaconPresence(false);   // taken — not listening any more
               room = p.id;
               showPanel();
               setStatus("Connecting…", "Answering " + p.name);
