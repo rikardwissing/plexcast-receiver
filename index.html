@@ -471,9 +471,29 @@
     });
     setStatus("Connecting…", "Handing back the answer");
     await postAnswer(encode(pc.localDescription));
+
+    // Self-heal: if the channel doesn't open in time, this answer went to a
+    // dead offer (e.g. we reconnected before the sender re-armed). Tear down
+    // and run the whole handshake again — the fresh offer will be up by then.
+    await new Promise(function (res) { setTimeout(res, 12000); });
+    if (!wasConnected) {
+      try { pc.close(); } catch (x) {}
+      dc = null;
+      throw { retry: true };
+    }
   }
 
-  connect().catch(function (e) { fail(String(e && e.message || e)); });
+  function start(attempt) {
+    connect().catch(function (e) {
+      if (e && e.retry && attempt < 4) {
+        setStatus("Connecting…", "Trying again…");
+        start(attempt + 1);
+      } else {
+        fail(String(e && e.message || e));
+      }
+    });
+  }
+  start(1);
 })();
 </script>
 </body>
