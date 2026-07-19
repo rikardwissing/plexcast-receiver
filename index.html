@@ -104,7 +104,7 @@
       </svg>
       <div class="spinner"></div>
       <h1>Connecting…</h1>
-      <div id="status">Reaching the phone</div>
+      <div id="status">Reaching the sender</div>
     </div>
 
     <!-- Code-entry landing -->
@@ -116,7 +116,7 @@
       </svg>
       <p class="wordmark">Plex Cast</p>
       <h1>Enter your code</h1>
-      <p class="sub">Type the 4-digit code shown on your phone.</p>
+      <p class="sub">Type the 4-digit code shown in the app.</p>
       <div class="otp" id="otp">
         <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
         <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code" aria-label="Cast code">
@@ -178,7 +178,7 @@
       submitted = true;
       room = val;
       showPanel();
-      setStatus("Connecting…", "Reaching the phone");
+      setStatus("Connecting…", "Reaching the sender");
       connect().catch(function (e) { fail(String(e && e.message || e)); });
     }
     input.addEventListener("input", render);
@@ -217,6 +217,8 @@
   // LE id prefix), an empty-body chunk marking EOF. Multiple requests can be
   // in flight; each is keyed by id.
   var dc = null;
+  // Who we're connected to — replaced by the sender's "hi" (device name).
+  var sender = "the sender";
   var reqId = 1;
   var pending = {};   // id -> {resolve, reject, meta, chunks, got}
 
@@ -246,6 +248,14 @@
 
   function onControl(obj) {
     switch (obj.t) {
+      case "hi":
+        // The sender introduces itself ("Rikard's MacBook Pro", "iPhone") so
+        // status texts can say who we're connected to, not assume "the phone".
+        if (obj.sender) {
+          sender = String(obj.sender).slice(0, 40);
+          setStatus("Connected", "Waiting for " + sender + " to start a video…");
+        }
+        break;
       case "load": loadMedia(obj); break;
       case "play": v.play().catch(function () {}); break;
       case "pause": v.pause(); break;
@@ -427,10 +437,10 @@
         else onBody(ev.data);
       };
       dc.onopen = function () {
-        setStatus("Connected", "Waiting for the phone to start a video…");
+        setStatus("Connected", "Waiting for " + sender + " to start a video…");
         try { dc.send(JSON.stringify({ t: "hello", label: viewerLabel() })); } catch (x) {}
       };
-      dc.onclose = function () { stopMedia(); setStatus("Disconnected", "The phone ended the session."); };
+      dc.onclose = function () { stopMedia(); setStatus("Disconnected", "The session was ended by " + sender + "."); };
     };
     pc.onconnectionstatechange = function () {
       if (pc.connectionState === "failed") fail("Couldn’t establish a direct connection (this network may need TURN).");
