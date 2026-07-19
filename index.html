@@ -648,7 +648,12 @@
       };
       dc.onclose = function () { stopMedia(); setStatus("Disconnected", "The session was ended by " + sender + "."); };
     };
+    window.PLEXCAST_ICE_LOG = window.PLEXCAST_ICE_LOG || [];
+    pc.oniceconnectionstatechange = function () {
+      window.PLEXCAST_ICE_LOG.push(Date.now() % 100000 + " ice:" + pc.iceConnectionState);
+    };
     pc.onconnectionstatechange = function () {
+      window.PLEXCAST_ICE_LOG.push(Date.now() % 100000 + " conn:" + pc.connectionState);
       if (pc.connectionState !== "failed") return;
       // Failing BEFORE a channel ever opened is a NAT-traversal problem; failing
       // after means the sender vanished (app quit, network drop) — say that.
