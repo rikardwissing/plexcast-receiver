@@ -178,10 +178,14 @@
 
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<!-- mp4box.js: demuxes a multi-audio direct MP4 so the MSE engine can switch
+     audio without reloading video (the same lib the Chromecast receiver uses,
+     vendored locally so the receiver has no runtime CDN dependency for it). -->
+<script src="mp4box.all.min.js"></script>
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 4;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 5;   // bump when debugging cached-page confusion
   var qs = new URLSearchParams(location.search);
   // sig = signalling mailbox; defaults to the app's built-in Worker so a plain
   // link (page + #code) needs no query. room = the short code from the hash,
@@ -557,25 +561,37 @@
       case "volume": if (obj.value != null) { try { v.volume = obj.value; } catch (e) {} } break;
       case "stop": stopped = true; stopMedia(); break;
       case "audioTrack":
-        // Sender picked an audio track by its app typeIndex. Package renditions
-        // are named audio<typeIndex>.m3u8, so match by URL rather than assuming
-        // manifest position. hls.js swaps the rendition seamlessly, keeping video.
-        if (hls && obj.typeIndex != null) {
+        // Sender picked an audio track by its app typeIndex. On the package path
+        // renditions are named audio<typeIndex>.m3u8, so match by URL (hls.js
+        // swaps the rendition seamlessly); on the direct-MP4 path the MSE engine
+        // reads it as its mp4box audio-track index (same file order).
+        if (obj.typeIndex == null) break;
+        if (hls) {
           var ai = renditionIndex(hls.audioTracks, "audio", obj.typeIndex);
           if (ai >= 0) { try { hls.audioTrack = ai; } catch (e) {} }
+        } else if (engine) {
+          try { engine.setAudioTrack(obj.typeIndex); } catch (e) {}
         }
         break;
       case "subtitleTrack":
-        // Sender picked a subtitle track by typeIndex (-1 = off). subtitleDisplay
-        // must be on for hls.js to render cues; it never enables itself from
-        // merely listing a track.
-        if (hls && obj.typeIndex != null) {
+        // Sender picked a subtitle track by typeIndex (-1 = off). On the package
+        // path hls.js needs subtitleDisplay on (it never self-enables); on the
+        // direct-MP4 path we toggle the matching <track> overlay's mode.
+        if (obj.typeIndex == null) break;
+        if (hls) {
           if (obj.typeIndex < 0) { try { hls.subtitleDisplay = false; hls.subtitleTrack = -1; } catch (e) {} }
           else {
             var si = renditionIndex(hls.subtitleTracks, "sub", obj.typeIndex);
             if (si >= 0) { try { hls.subtitleDisplay = true; hls.subtitleTrack = si; } catch (e) {} }
           }
+        } else {
+          selectSubtitle(obj.typeIndex);
         }
+        break;
+      case "subs":
+        // Subtitles finished extracting after the load landed — add them in place
+        // (no reload). Guard on gen so a stale list can't attach to newer media.
+        if (obj.gen == null || obj.gen === currentGen) applySubtitles(obj.subs);
         break;
       case "res": {
         var p = pending[obj.id];
@@ -697,6 +713,8 @@
   function stopMedia() {
     clearStall();
     if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
+    teardownEngine();
+    clearSubtitles();
     v.pause(); v.removeAttribute("src"); v.load();
     showPanel(); setStatus("Stopped", "");
   }
@@ -710,6 +728,8 @@
     if (reconnecting) return;
     clearStall();
     if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
+    teardownEngine();
+    clearSubtitles();
     v.pause(); v.removeAttribute("src"); v.load();
     showPanel(); setStatus("Can’t play this", detail);
     try { if (channelReady()) dc.send(JSON.stringify({ t: "cantplay", reason: detail })); } catch (x) {}
@@ -767,10 +787,293 @@
       v.poster = URL.createObjectURL(new Blob([r.data], { type: (r.meta && r.meta.ctype) || "image/jpeg" }));
     }).catch(function () {});
   }
+  // ---- MSE engine: audio switching for a multi-audio direct MP4 --------------
+  // A muxed MP4 on native <video> exposes only its default audio. For a file the
+  // sender flags {mse:true} we demux it with mp4box.js — pulling 2 MB byte
+  // windows over THIS data channel instead of HTTP — and feed two SourceBuffers.
+  // Every audio track is fragmented up front (unselected tracks are dropped as
+  // they arrive), so a switch is: flush the audio buffer, append the other
+  // track's init segment, re-extract from the current position — video is never
+  // reloaded. This is the Chromecast receiver's engine (receiver/receiver.js)
+  // adapted from `fetch(Range)` to `fetchOverChannel`.
+  function MseEngine(path, audioTypeIndex) {
+    this.path = path;
+    this.wantAudioIndex = audioTypeIndex || 0;
+    this.mediaSource = new MediaSource();
+    this.objectUrl = URL.createObjectURL(this.mediaSource);
+    this.mp4 = MP4Box.createFile();
+    this.buffers = {};        // 'video' | 'audio' → SourceBuffer
+    this.queues = { video: [], audio: [] };
+    this.initSegs = {};       // mp4 track id → init segment ArrayBuffer
+    this.audioTracks = [];    // mp4box audio track infos, file order
+    this.videoTrackId = null;
+    this.audioTrackId = null;
+    this.fetchOffset = 0;
+    this.fetchGen = 0;        // bumped to cancel an in-flight pump
+    this.inflightId = null;   // the data-channel request id currently fetching
+    this.dead = false;
+    var self = this;
+    this.mediaSource.addEventListener("sourceopen", function () { self.onSourceOpen(); });
+  }
+  MseEngine.prototype.onSourceOpen = function () {
+    var self = this;
+    this.mp4.onError = function (e) { trace("engine mp4box error: " + e); };
+    this.mp4.onReady = function (info) { self.onReady(info); };
+    this.mp4.onSegment = function (id, user, buffer) { self.onSegment(id, buffer); };
+    this.pump(0);
+  };
+  MseEngine.prototype.onReady = function (info) {
+    var video = info.videoTracks && info.videoTracks[0];
+    this.audioTracks = info.audioTracks || [];
+    var audio = this.audioTracks[this.wantAudioIndex] || this.audioTracks[0];
+    if (!video || !audio) { playbackError("This video is missing a track the player needs."); return; }
+    // Same pre-flight codec gate as the HLS path — an unsupported codec (E-AC-3
+    // is the classic) otherwise buffers forever behind a silent SourceBuffer.
+    if (!canPlay("video", video.codec)) {
+      playbackError("This browser can’t decode the video: " + codecName(video.codec) + "."); return;
+    }
+    if (!canPlay("audio", audio.codec)) {
+      playbackError("This browser can’t decode the audio: " + codecName(audio.codec) +
+                    ". Convert the file (compatible audio) and cast again."); return;
+    }
+    this.videoTrackId = video.id;
+    this.audioTrackId = audio.id;
+    if (info.duration && info.timescale) {
+      try { this.mediaSource.duration = info.duration / info.timescale; } catch (e) {}
+    }
+    var vMime = 'video/mp4; codecs="' + video.codec + '"';
+    this.audioMimeFor = function (t) { return 'audio/mp4; codecs="' + t.codec + '"'; };
+    var self = this;
+    try {
+      this.buffers.video = this.mediaSource.addSourceBuffer(vMime);
+      this.buffers.audio = this.mediaSource.addSourceBuffer(this.audioMimeFor(audio));
+    } catch (e) {
+      playbackError("This browser can’t decode this format."); return;
+    }
+    ["video", "audio"].forEach(function (kind) {
+      self.buffers[kind].addEventListener("updateend", function () { self.drain(kind); });
+    });
+    // Fragment video + EVERY audio track; unselected audio is dropped in
+    // onSegment, so a later switch only needs a refill from the live position.
+    this.mp4.setSegmentOptions(video.id, null, { nbSamples: 100 });
+    for (var i = 0; i < this.audioTracks.length; i++) {
+      this.mp4.setSegmentOptions(this.audioTracks[i].id, null, { nbSamples: 100 });
+    }
+    var segs = this.mp4.initializeSegmentation();
+    for (var j = 0; j < segs.length; j++) this.initSegs[segs[j].id] = segs[j].buffer;
+    this.enqueue("video", this.initSegs[video.id]);
+    this.enqueue("audio", this.initSegs[audio.id]);
+    this.mp4.start();
+    trace("engine ready: video " + video.codec + ", " + this.audioTracks.length +
+          " audio, playing #" + this.wantAudioIndex);
+    // A moov-at-end file streamed past before the index was known — either way,
+    // sample extraction starts by seeking the demux back to the first frame.
+    this.reposition(0);
+  };
+  MseEngine.prototype.onSegment = function (id, buffer) {
+    if (id === this.videoTrackId) this.enqueue("video", buffer);
+    else if (id === this.audioTrackId) this.enqueue("audio", buffer);
+    // other audio tracks: demuxed and dropped
+  };
+  MseEngine.prototype.enqueue = function (kind, buffer) {
+    if (!buffer) return;
+    this.queues[kind].push(buffer);
+    this.drain(kind);
+  };
+  MseEngine.prototype.drain = function (kind) {
+    var sb = this.buffers[kind];
+    if (this.dead || !sb || sb.updating || this.mediaSource.readyState !== "open") return;
+    var next = this.queues[kind].shift();
+    if (!next) return;
+    try { sb.appendBuffer(next); }
+    catch (e) {
+      if (e.name === "QuotaExceededError") { this.queues[kind].unshift(next); this.evict(kind); }
+      else trace("engine append " + kind + " failed: " + e);
+    }
+  };
+  MseEngine.prototype.evict = function (kind) {
+    var sb = this.buffers[kind];
+    var now = v.currentTime || 0;
+    var keepFrom = Math.max(0, now - 20);
+    try {
+      if (!sb.updating && sb.buffered.length && sb.buffered.start(0) < keepFrom - 1) sb.remove(0, keepFrom);
+    } catch (e) {}
+  };
+  MseEngine.prototype.bufferedAheadSec = function () {
+    var sb = this.buffers.video;
+    if (!sb || !sb.buffered.length) return 0;
+    return Math.max(0, sb.buffered.end(sb.buffered.length - 1) - (v.currentTime || 0));
+  };
+  // Sequential byte pump: fetch 2 MB windows over the channel, hand them to
+  // mp4box (which returns the next offset it wants), stall while >90s is
+  // buffered ahead, trim behind playback as we go.
+  MseEngine.prototype.pump = async function (offset) {
+    var gen = ++this.fetchGen;
+    var CHUNK = 2 * 1024 * 1024;
+    this.fetchOffset = offset;
+    while (!this.dead && gen === this.fetchGen) {
+      if (this.bufferedAheadSec() > 90) {
+        await new Promise(function (r) { setTimeout(r, 500); });
+        this.evict("video"); this.evict("audio");
+        continue;
+      }
+      var buf;
+      try {
+        var self = this;
+        var r = await fetchOverChannel(this.path, {
+          start: this.fetchOffset, end: this.fetchOffset + CHUNK - 1,
+          onId: function (id) { self.inflightId = id; },
+        });
+        this.inflightId = null;
+        buf = r.data.buffer;
+      } catch (e) { trace("engine fetch failed @" + this.fetchOffset + ": " + e); return; }
+      if (this.dead || gen !== this.fetchGen) return;
+      if (!buf.byteLength) { this.mp4.flush(); this.endStreamWhenDrained(gen); return; }  // EOF
+      buf.fileStart = this.fetchOffset;
+      var next = this.mp4.appendBuffer(buf);
+      // appendBuffer can fire onReady, whose reposition() supersedes THIS pump.
+      if (this.dead || gen !== this.fetchGen) return;
+      if (buf.byteLength < CHUNK) { this.mp4.flush(); this.endStreamWhenDrained(gen); return; }  // short read = EOF
+      this.fetchOffset = (typeof next === "number") ? next : this.fetchOffset + buf.byteLength;
+    }
+  };
+  MseEngine.prototype.endStreamWhenDrained = function (gen) {
+    var self = this;
+    var tryEnd = function () {
+      if (self.dead || gen !== self.fetchGen || self.mediaSource.readyState !== "open") return;
+      if (self.queues.video.length || self.queues.audio.length ||
+          self.buffers.video.updating || self.buffers.audio.updating) { setTimeout(tryEnd, 200); return; }
+      try { self.mediaSource.endOfStream(); } catch (e) {}
+    };
+    tryEnd();
+  };
+  // Free every already-extracted sample's data and reset its read cursor. This
+  // is what makes a BACKWARD seek possible: mp4box.seek skips samples still
+  // marked "fully read", so without this a seek to a time behind the parse head
+  // (an audio switch's refill, or a user scrubbing back) returns the forward
+  // parse cursor instead of the target's real byte offset — the switched track
+  // would then only fill in from far ahead, leaving a silence gap. Releasing
+  // also bounds memory over a long stream. (The Chromecast engine omits this;
+  // over the data channel, with re-fetch on reposition, it's both safe and
+  // necessary.)
+  MseEngine.prototype.releaseConsumed = function () {
+    var ids = [this.videoTrackId];
+    for (var a = 0; a < this.audioTracks.length; a++) ids.push(this.audioTracks[a].id);
+    for (var k = 0; k < ids.length; k++) {
+      var trak = this.mp4.getTrackById(ids[k]);
+      if (!trak || !trak.samples) continue;
+      var upto = 0;
+      for (var i = 0; i < trak.samples.length; i++) {
+        if (trak.samples[i].alreadyRead === trak.samples[i].size) upto = i + 1; else break;
+      }
+      if (upto > 0) { try { this.mp4.releaseUsedSamples(ids[k], upto); } catch (e) {} }
+    }
+  };
+  // Reposition the demux (post-index start, sender seek, or audio-switch refill).
+  // Release consumed samples first so mp4box maps the time to the real previous-
+  // keyframe byte offset (see releaseConsumed); cancel the in-flight window so
+  // the sender stops streaming bytes we're leaving; then re-pump from there —
+  // re-extracted video just overwrites itself in MSE.
+  MseEngine.prototype.reposition = function (timeSec) {
+    if (this.inflightId != null) { cancelRequest(this.inflightId); this.inflightId = null; }
+    this.releaseConsumed();
+    var seek;
+    try { seek = this.mp4.seek(Math.max(0, timeSec), true); }
+    catch (e) { trace("engine seek failed: " + e); return; }
+    this.pump(seek.offset);
+  };
+  // The whole point of the engine: switch audio without touching video. `index`
+  // is the app typeIndex == the mp4box audio-track array index (file order).
+  MseEngine.prototype.setAudioTrack = function (index) {
+    var track = this.audioTracks[index];
+    if (!track || track.id === this.audioTrackId) return;
+    var sb = this.buffers.audio;
+    if (!sb) return;
+    this.audioTrackId = track.id;
+    this.wantAudioIndex = index;
+    var self = this;
+    var swap = function () {
+      if (sb.updating) { setTimeout(swap, 50); return; }
+      try { if (sb.buffered.length) sb.remove(0, self.mediaSource.duration || 1e9); } catch (e) {}
+      var append = function () {
+        if (sb.updating) { setTimeout(append, 50); return; }
+        try { if (sb.changeType) sb.changeType(self.audioMimeFor(track)); } catch (e) {}
+        self.queues.audio = [self.initSegs[track.id]];
+        self.drain("audio");
+        self.reposition((v.currentTime || 0) - 0.5);
+        trace("engine audio → #" + index + " (" + (track.language || "?") + ")");
+      };
+      append();
+    };
+    swap();
+  };
+  MseEngine.prototype.destroy = function () {
+    this.dead = true;
+    this.fetchGen++;
+    if (this.inflightId != null) { cancelRequest(this.inflightId); this.inflightId = null; }
+    try { this.mp4.stop(); } catch (e) {}
+    try { URL.revokeObjectURL(this.objectUrl); } catch (e) {}
+  };
+
+  var engine = null;
+  function teardownEngine() { if (engine) { try { engine.destroy(); } catch (e) {} engine = null; } }
+  // A sender seek sets v.currentTime; when the engine drives playback it must
+  // move the demux to match, or the video stalls at an unbuffered position.
+  v.addEventListener("seeking", function () { if (engine) engine.reposition(v.currentTime || 0); });
+
+  // ---- Subtitles: WebVTT sidecars as <track> overlays ------------------------
+  // A muxed MP4's embedded text subs can't ride native <video>, so the sender
+  // extracts each to WebVTT (served at /sub/<i> over the channel) and lists them
+  // in the load (or a later `subs` message). We fetch each, wrap it in a blob
+  // URL, and add a <track>; the sender's subtitleTrack message toggles which one
+  // shows (by app typeIndex, -1 = off). Works on both the MSE and plain paths.
+  var subBlobs = [];
+  // The subtitle the sender last picked (app typeIndex, -1 = off). Sticky so a
+  // subtitleTrack message that lands BEFORE the async <track>s are built (iOS
+  // carries a subtitle choice into the load) still takes effect once they load.
+  var wantedSubtitle = -1;
+  function trackMode(el) {
+    var ti = parseInt(el.getAttribute("data-typeindex"), 10);
+    return (wantedSubtitle >= 0 && ti === wantedSubtitle) ? "showing" : "disabled";
+  }
+  function clearSubtitles() {
+    var tracks = v.querySelectorAll("track");
+    for (var i = 0; i < tracks.length; i++) v.removeChild(tracks[i]);
+    for (var j = 0; j < subBlobs.length; j++) { try { URL.revokeObjectURL(subBlobs[j]); } catch (e) {} }
+    subBlobs = [];
+  }
+  function applySubtitles(list) {
+    clearSubtitles();
+    if (!list || !list.length) return;
+    list.forEach(function (s) {
+      fetchOverChannel(s.url, {}).then(function (r) {
+        var url = URL.createObjectURL(new Blob([r.data], { type: "text/vtt" }));
+        subBlobs.push(url);
+        var t = document.createElement("track");
+        t.kind = "subtitles";
+        t.label = s.label || s.lang || "Subtitles";
+        if (s.lang && s.lang !== "und") t.srclang = s.lang;
+        t.src = url;
+        t.setAttribute("data-typeindex", String(s.typeIndex));
+        v.appendChild(t);
+        try { t.track.mode = trackMode(t); } catch (e) {}   // honour a choice made before we loaded
+      }).catch(function () {});
+    });
+  }
+  // Show the <track> whose app typeIndex matches (others disabled); -1 = all off.
+  function selectSubtitle(typeIndex) {
+    wantedSubtitle = (typeIndex == null) ? -1 : typeIndex;
+    var tracks = v.querySelectorAll("track");
+    for (var i = 0; i < tracks.length; i++) {
+      try { tracks[i].track.mode = trackMode(tracks[i]); } catch (e) {}
+    }
+  }
+
   function loadMedia(m) {
     stopMedia();                 // pauses the old media → a final OLD-gen status
     stopped = false;             // a fresh load = active again (clears any prior stop)
     currentGen = m.gen || 0;     // now the current load; new statuses carry this
+    wantedSubtitle = -1;         // fresh media starts with subtitles off
     showVideo();
     setPoster(m.poster);
     var startTime = m.startTime || 0;
@@ -828,6 +1131,23 @@
       });
       return;
     }
+    // A multi-audio MP4 (sender flagged {mse:true}): demux in-browser so audio
+    // can switch without reloading video. mp4box pulls byte windows over the
+    // same data channel; subtitles ride as <track> overlays.
+    if (m.mse && window.MediaSource && typeof MP4Box !== "undefined") {
+      setStatus("Buffering…", "Streaming over the connection");
+      teardownEngine();
+      engine = new MseEngine(m.url, m.audioTypeIndex || 0);
+      v.src = engine.objectUrl;
+      v.addEventListener("loadedmetadata", function once() {
+        v.removeEventListener("loadedmetadata", once);
+        if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
+      });
+      applySubtitles(m.subs);
+      armStall();
+      play();
+      return;
+    }
     // A plain (non-package) file. With the Service Worker active, <video> streams
     // it with native Range requests over the data channel — a rolling window of
     // small chunks, seekable, never the whole file.
@@ -838,6 +1158,7 @@
         v.removeEventListener("loadedmetadata", once);
         if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
       });
+      applySubtitles(m.subs);
       armStall();
       play();
       return;
@@ -853,6 +1174,7 @@
         v.removeEventListener("loadedmetadata", once);
         if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
       });
+      applySubtitles(m.subs);
       armStall();
       play();
     }).catch(function (e) { fail("Couldn’t load media: " + (e && e.message || e)); });
