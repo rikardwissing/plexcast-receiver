@@ -558,6 +558,35 @@
     }
   }
 
+  // ---- Service Worker: native-Range streaming for plain MP4s -----------------
+  // A plain (non-package) MP4 plays through <video src>, which issues its own
+  // HTTP Range requests. The SW (sw.js) intercepts them and asks US (we own the
+  // data channel) for each byte window — so a big file streams a rolling window
+  // of small chunks and seeks instantly, instead of downloading whole into a
+  // Blob. If the SW isn't available/active, loadMedia falls back to the Blob.
+  var swReady = false;
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js").then(function () {
+      if (navigator.serviceWorker.controller) swReady = true;
+    }).catch(function (e) { console.warn("SW register failed", e); });
+    navigator.serviceWorker.addEventListener("controllerchange", function () {
+      if (navigator.serviceWorker.controller) swReady = true;
+    });
+    // The SW asks for a byte window; fetch it over the channel and hand back the
+    // bytes (transferring the buffer, so it's a move not a copy).
+    navigator.serviceWorker.addEventListener("message", function (e) {
+      var d = e.data || {}, port = e.ports && e.ports[0];
+      if (d.type !== "rtc-range" || !port) return;
+      fetchOverChannel(d.path, { start: d.start, end: d.end }).then(function (r) {
+        var meta = r.meta || {}, buf = r.data.buffer;
+        port.postMessage({ status: meta.status || 206, total: meta.total || 0,
+                           ctype: meta.ctype || "video/mp4", bytes: buf }, [buf]);
+      }).catch(function () {
+        port.postMessage({ status: 502, total: 0, bytes: new ArrayBuffer(0) });
+      });
+    });
+  }
+
   // ---- hls.js loader over the data channel -----------------------------------
   // The stats shape must match hls.js's LoadStats exactly — it reads/writes
   // loading, parsing AND buffering timings; a missing `buffering` throws
@@ -725,10 +754,23 @@
       });
       return;
     }
-    // A plain (non-package) file: WebRTC has no HTTP server to seek against, so
-    // pull the whole file over the data channel into a Blob. Works for anything
-    // the browser can play, but downloads fully first — a cast package (HLS)
-    // streams and seeks properly and is the right path for large files.
+    // A plain (non-package) file. With the Service Worker active, <video> streams
+    // it with native Range requests over the data channel — a rolling window of
+    // small chunks, seekable, never the whole file.
+    if (swReady && navigator.serviceWorker && navigator.serviceWorker.controller) {
+      setStatus("Buffering…", "Streaming over the connection");
+      v.src = "__rtc_stream__?p=" + encodeURIComponent(m.url);
+      v.addEventListener("loadedmetadata", function once() {
+        v.removeEventListener("loadedmetadata", once);
+        if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
+      });
+      armStall();
+      play();
+      return;
+    }
+    // Fallback (SW unsupported, or not yet controlling on this first load): pull
+    // the whole file over the channel into a Blob. Works for anything the browser
+    // can play, but downloads fully first.
     setStatus("Buffering…", "Downloading over the connection");
     fetchOverChannel(m.url, {}).then(function (r) {
       var blob = new Blob([r.data], { type: (r.meta && r.meta.ctype) || "video/mp4" });
