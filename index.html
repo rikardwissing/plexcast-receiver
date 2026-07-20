@@ -198,17 +198,40 @@
   // Debounce so the data-channel close and the connection-failed event (both
   // fire on a drop) only tear down once.
   var disconnecting = false;
-  // The connection dropped after being live — return to listening so a paired
-  // browser is a castable device again (and the sender's re-arm is picked up
-  // by the pairing poll). Deep-link sessions have no landing listener, so
-  // reload bare: the page lands on its pairings (or the code entry).
-  function returnToListening() {
+  // In-place reconnect budget. A transient WebRTC drop (STUN-only + gatherOnce
+  // is fragile to NAT rebinding / Wi-Fi blips) shouldn't kick a live cast back
+  // to the code screen — the sender keeps its offer re-armed under the same
+  // room, so we re-run the handshake in place and playback resumes. Reset on a
+  // successful (re)connect; only give up after MAX_RECONNECT consecutive fails.
+  var reconnectAttempts = 0;
+  var MAX_RECONNECT = 3;
+  // Set when the sender deliberately ends the cast ({t:"stop"}) — then a channel
+  // close is expected and we should NOT try to reconnect.
+  var stopped = false;
+  // The connection dropped after being live. Unless the sender stopped on
+  // purpose (or we've exhausted retries), reconnect in place on the same room;
+  // keep the "Reconnecting…" panel up meanwhile instead of dumping to the code
+  // entry.
+  function handleDrop() {
     if (disconnecting) return;
     disconnecting = true;
     stopMedia();
     try { if (window.PAGEPC) window.PAGEPC.close(); } catch (e) {}
+    pending = {};   // orphan any in-flight channel requests from the dead peer
     dc = null;
     wasConnected = false;
+    if (stopped || !room || reconnectAttempts >= MAX_RECONNECT) { giveUp(); return; }
+    reconnectAttempts++;
+    showPanel();
+    setStatus("Reconnecting…", "Lost the connection to " + sender +
+              " — retrying (" + reconnectAttempts + "/" + MAX_RECONNECT + ")");
+    // Give the sender a beat to re-arm its offer, then re-run the handshake.
+    setTimeout(function () { if (!stopped) start(1); }, 1200);
+  }
+  // Sender stopped on purpose, or reconnection is exhausted — become a castable
+  // device again: a paired page goes back to listening, a code/deep-link page
+  // reloads bare to the code entry.
+  function giveUp() {
     if (resumeListening) resumeListening();
     else location.href = location.pathname;
   }
@@ -501,7 +524,7 @@
       case "pause": v.pause(); break;
       case "seek": if (obj.time != null) { try { v.currentTime = obj.time; } catch (e) {} } break;
       case "volume": if (obj.value != null) { try { v.volume = obj.value; } catch (e) {} } break;
-      case "stop": stopMedia(); break;
+      case "stop": stopped = true; stopMedia(); break;
       case "audioTrack":
         // Sender picked an audio track by its app typeIndex. Package renditions
         // are named audio<typeIndex>.m3u8, so match by URL rather than assuming
@@ -712,6 +735,7 @@
   }
   function loadMedia(m) {
     stopMedia();                 // pauses the old media → a final OLD-gen status
+    stopped = false;             // a fresh load = active again (clears any prior stop)
     currentGen = m.gen || 0;     // now the current load; new statuses carry this
     showVideo();
     setPoster(m.poster);
@@ -858,6 +882,7 @@
       };
       dc.onopen = function () {
         wasConnected = true;
+        reconnectAttempts = 0;   // a live channel — refresh the reconnect budget
         setStatus("Connected", "Waiting for " + sender + " to start a video…");
         // The hello carries the pairing tokens this browser holds, so a sender
         // that already knows one recognises us and reuses it — connecting with
@@ -867,7 +892,7 @@
                                    pairings: loadPairs().map(function (p) { return p.id; }) }));
         } catch (x) {}
       };
-      dc.onclose = function () { returnToListening(); };
+      dc.onclose = function () { handleDrop(); };
     };
     window.PAGEPC = pc;   // QA observable
     window.PLEXCAST_ICE_LOG = window.PLEXCAST_ICE_LOG || [];
@@ -880,7 +905,7 @@
       // Failing BEFORE a channel ever opened is a NAT-traversal problem; failing
       // after means the sender vanished (app quit, network drop) — go back to
       // listening so we're castable again.
-      if (wasConnected) returnToListening();
+      if (wasConnected) handleDrop();
       else fail("Couldn’t establish a direct connection (this network may need TURN).");
     };
 
