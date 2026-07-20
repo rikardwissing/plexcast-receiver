@@ -577,11 +577,23 @@
     navigator.serviceWorker.addEventListener("message", function (e) {
       var d = e.data || {}, port = e.ports && e.ports[0];
       if (d.type !== "rtc-range" || !port) return;
-      fetchOverChannel(d.path, { start: d.start, end: d.end }).then(function (r) {
+      var reqId = null, done = false;
+      // The SW aborts this window when the <video> seeks away mid-fetch. Drop the
+      // in-flight request at the SENDER too — its IO queue is serial, so a stale
+      // window left draining over a slow uplink would block the newly-seeked range.
+      port.onmessage = function (ev) {
+        if (ev.data && ev.data.abort) { done = true; if (reqId != null) cancelRequest(reqId); }
+      };
+      fetchOverChannel(d.path, { start: d.start, end: d.end,
+                                 onId: function (id) { reqId = id; } }).then(function (r) {
+        if (done) return;   // aborted while in flight
+        done = true;
         var meta = r.meta || {}, buf = r.data.buffer;
         port.postMessage({ status: meta.status || 206, total: meta.total || 0,
                            ctype: meta.ctype || "video/mp4", bytes: buf }, [buf]);
       }).catch(function () {
+        if (done) return;
+        done = true;
         port.postMessage({ status: 502, total: 0, bytes: new ArrayBuffer(0) });
       });
     });

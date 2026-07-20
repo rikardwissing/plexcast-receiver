@@ -6,15 +6,20 @@
 // bridges to it: it intercepts the video's range fetches, asks the page for the
 // requested byte window over the channel, and streams the reply back. The body
 // is a pull-driven stream, so when the <video> buffer fills and stops reading,
-// we stop asking the page — and the phone stops reading the file. Seeking aborts
-// the fetch (a fresh Range starts a new window run).
+// we stop asking the page — and the phone stops reading the file.
+//
+// Seeking aborts the fetch → the stream is cancelled → we tell the page to abort
+// the in-flight window at the SENDER too (its serve loop drops a cancelled id).
+// Without that, a stale window keeps draining and — because the sender's IO
+// queue is serial — blocks the newly-seeked range, so rapid scrubbing over a
+// slow (cellular) uplink would stall and never recover.
 //
 // The page points the element at:  __rtc_stream__?p=<data-channel path>
 // e.g.  __rtc_stream__?p=%2Fmedia  → the phone's "/media".
 
 const MARKER = "/__rtc_stream__";
-const WINDOW = 1 << 20; // 1 MiB per data-channel round-trip — small enough to be
-                        // responsive to seeks/backpressure, big enough to be lean.
+const WINDOW = 256 * 1024; // per data-channel round-trip — small so a seek's
+                           // stale window drains fast and the queue frees quickly.
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
@@ -37,9 +42,12 @@ async function serve(request, path) {
     if (m[2]) end = parseInt(m[2], 10);
   }
 
+  let cancelled = false;
+  let inflight = null;   // the current window's { abort } while awaiting the page
+
   // First window — also tells us the total size (for Content-Range/Length).
   const firstEnd = end == null ? start + WINDOW - 1 : Math.min(start + WINDOW - 1, end);
-  const first = await ask(path, start, firstEnd);
+  const first = await ask(path, start, firstEnd, (a) => { inflight = a; });
   if (!first || (first.status && first.status >= 400) || !first.bytes) {
     return new Response("upstream error", { status: 502 });
   }
@@ -50,7 +58,6 @@ async function serve(request, path) {
 
   let cursor = start + first.bytes.byteLength;
   let head = first.bytes;
-  let cancelled = false;
 
   const stream = new ReadableStream({
     start(controller) {
@@ -61,14 +68,17 @@ async function serve(request, path) {
     async pull(controller) {
       if (cancelled || cursor > lastByte) { controller.close(); return; }
       const upto = Math.min(cursor + WINDOW - 1, lastByte);
-      const win = await ask(path, cursor, upto);
-      if (cancelled) return;
+      const win = await ask(path, cursor, upto, (a) => { inflight = a; });
+      if (cancelled) return;   // seeked away while awaiting — drop it
       if (!win || !win.bytes || win.bytes.byteLength === 0) { controller.close(); return; }
       controller.enqueue(new Uint8Array(win.bytes));
       cursor += win.bytes.byteLength;
       if (cursor > lastByte) controller.close();
     },
-    cancel() { cancelled = true; }   // the <video> seeked/stopped — pull no more
+    cancel() {                 // the <video> seeked/stopped
+      cancelled = true;
+      if (inflight) inflight.abort();   // stop the sender streaming the stale window
+    }
   });
 
   const headers = {
@@ -82,13 +92,24 @@ async function serve(request, path) {
 }
 
 /// Ask the receiver page (which owns the data channel) for one byte window.
-async function ask(path, start, end) {
+/// `setAbort` receives an { abort } handle that tells the page to abort THIS
+/// window's request at the sender (and unblocks our await).
+async function ask(path, start, end, setAbort) {
   const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
   const client = clients[0];
   if (!client) return null;
   return new Promise((resolve) => {
     const channel = new MessageChannel();
-    channel.port1.onmessage = (ev) => resolve(ev.data);
+    let settled = false;
+    channel.port1.onmessage = (ev) => { if (!settled) { settled = true; resolve(ev.data); } };
+    setAbort({
+      abort() {
+        if (settled) return;
+        settled = true;
+        try { channel.port1.postMessage({ abort: true }); } catch (e) {}
+        resolve(null);
+      }
+    });
     client.postMessage({ type: "rtc-range", path, start, end }, [channel.port2]);
   });
 }
