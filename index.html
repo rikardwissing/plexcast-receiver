@@ -882,7 +882,11 @@
   };
   MseEngine.prototype.drain = function (kind) {
     var sb = this.buffers[kind];
-    if (this.dead || !sb || sb.updating || this.mediaSource.readyState !== "open") return;
+    // Append when the MediaSource is "open" OR "ended" — appendBuffer itself
+    // transitions "ended" → "open", so a switch/seek after the stream reached
+    // EOF can refill. Bailing on "ended" here would deadlock (nothing ever
+    // re-opens it), stalling playback forever on a switch at/after full buffering.
+    if (this.dead || !sb || sb.updating || this.mediaSource.readyState === "closed") return;
     var next = this.queues[kind].shift();
     if (!next) return;
     try { sb.appendBuffer(next); }
@@ -962,11 +966,18 @@
     for (var k = 0; k < ids.length; k++) {
       var trak = this.mp4.getTrackById(ids[k]);
       if (!trak || !trak.samples) continue;
+      // Release up to the HIGHEST sample read at all — not just the contiguous
+      // prefix — and reset lastValidSample so samples a PRIOR refill re-read get
+      // released again. mp4box.releaseUsedSamples only moves its lastValidSample
+      // cursor forward, so without the reset those re-read samples stay marked
+      // "fully read"; the next seek skips them and returns the forward parse
+      // cursor instead of the target's byte offset → the switched audio refills
+      // far ahead of the playhead and playback stalls (bit the 2nd+ switch).
       var upto = 0;
       for (var i = 0; i < trak.samples.length; i++) {
-        if (trak.samples[i].alreadyRead === trak.samples[i].size) upto = i + 1; else break;
+        if (trak.samples[i].alreadyRead > 0) upto = i + 1;
       }
-      if (upto > 0) { try { this.mp4.releaseUsedSamples(ids[k], upto); } catch (e) {} }
+      if (upto > 0) { trak.lastValidSample = 0; try { this.mp4.releaseUsedSamples(ids[k], upto); } catch (e) {} }
     }
   };
   // Reposition the demux (post-index start, sender seek, or audio-switch refill).
