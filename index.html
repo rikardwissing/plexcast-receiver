@@ -623,8 +623,12 @@
     var path = context.url.replace(location.origin, "");
     if (path.indexOf("http") === 0) { try { path = new URL(context.url).pathname; } catch (e) {} }
     var opts = { onId: function (id) { self._id = id; } };
-    if (context.rangeStart != null) opts.start = context.rangeStart;
-    if (context.rangeEnd != null) opts.end = context.rangeEnd - 1;
+    // Only request a byte range when hls.js gives a real one. Non-byterange
+    // frags (e.g. subtitle VTTs) come with a degenerate rangeEnd=0; hls.js's own
+    // loader treats that (truthy check) as "no range → whole file". A `!= null`
+    // check would instead send end = 0-1 = -1, and the sender serves 0 bytes —
+    // an empty VTT, so subtitles load but render nothing.
+    if (context.rangeEnd) { opts.start = context.rangeStart; opts.end = context.rangeEnd - 1; }
     this.stats.loading.start = performance.now();
     fetchOverChannel(path, opts).then(function (r) {
       self._id = null;
