@@ -77,11 +77,6 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   #status { color: var(--muted); font-size: 14px; margin-top: 14px; min-height: 18px; }
 
-  #tap { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
-    background: rgba(11,12,24,0.72); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
-    z-index: 10; cursor: pointer; }
-  #tap.show { display: flex; }
-  #tap .btn { width: auto; padding: 0 32px; }
 
   /* Reconnect overlay over the frozen video. */
   #reconnect { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
@@ -174,7 +169,6 @@
       </div>
     </div>
   </div>
-  <div id="tap"><div class="btn">▶ Tap to start</div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
@@ -268,7 +262,6 @@
   // QA trace of the connect state machine (timestamped one-liners).
   window.PLEXCAST_TRACE = [];
   function trace(s) { window.PLEXCAST_TRACE.push(Math.round(performance.now()/1000) + "s " + s); }
-  var tap = document.getElementById("tap");
   var h1 = panel.querySelector("h1");
 
   function setStatus(main, sub) { if (main) h1.textContent = main; if (sub !== undefined) statusEl.textContent = sub; }
@@ -464,7 +457,7 @@
     }
     pollPairsOnce();
     // NB: no early return — the whole script (data-channel machinery, the
-    // tap-to-start handler, stall/error listeners) must still be defined for a
+    // playback stall/error listeners) must still be defined for a
     // session that begins here (typed code or paired listen). submitCode /
     // pollPairsOnce call start() themselves; the deep-link auto-start at the
     // bottom is guarded on `room`.
@@ -778,7 +771,19 @@
   });
   function play() {
     var pr = v.play();
-    if (pr && pr.catch) pr.catch(function () { tap.classList.add("show"); });
+    if (pr && pr.catch) pr.catch(function () {
+      // Autoplay was blocked — this open had no user gesture (a deep-link / QR
+      // scan, vs typing a code or clicking a device, which do count). No overlay:
+      // the native <video controls> play button is right there, and any single
+      // interaction anywhere retries play once, invisibly.
+      var retry = function () {
+        document.removeEventListener("pointerdown", retry);
+        document.removeEventListener("keydown", retry);
+        v.play().catch(function () {});
+      };
+      document.addEventListener("pointerdown", retry);
+      document.addEventListener("keydown", retry);
+    });
   }
   // Poster is served over the data channel too (no HTTP media server exists).
   function setPoster(path) {
@@ -819,7 +824,7 @@
     var self = this;
     this.mp4.onError = function (e) { trace("engine mp4box error: " + e); };
     this.mp4.onReady = function (info) { self.onReady(info); };
-    this.mp4.onSegment = function (id, user, buffer) { self.onSegment(id, buffer); };
+    this.mp4.onSegment = function (id, user, buffer, sampleNum) { self.onSegment(id, buffer, sampleNum); };
     this.pump(0);
   };
   MseEngine.prototype.onReady = function (info) {
@@ -870,10 +875,34 @@
     // sample extraction starts by seeking the demux back to the first frame.
     this.reposition(0);
   };
-  MseEngine.prototype.onSegment = function (id, buffer) {
-    if (id === this.videoTrackId) this.enqueue("video", buffer);
-    else if (id === this.audioTrackId) this.enqueue("audio", buffer);
+  MseEngine.prototype.onSegment = function (id, buffer, sampleNum) {
+    if (id === this.videoTrackId) {
+      // A reposition (audio switch / backward seek) re-extracts video from behind
+      // the parse head, but that region is already in the video SourceBuffer.
+      // Re-appending it is wasted work and a needless parse/decoder churn (a
+      // source of intermittent CHUNK_DEMUXER_ERROR); drop segments the video
+      // buffer already covers, keep only new frontier video.
+      if (this.videoBuffered(sampleNum)) return;
+      this.enqueue("video", buffer);
+    } else if (id === this.audioTrackId) {
+      this.enqueue("audio", buffer);
+    }
     // other audio tracks: demuxed and dropped
+  };
+  // Is the video for this just-emitted segment (its last sample's time) already
+  // in the video SourceBuffer? Segments are contiguous, so the last sample being
+  // covered means the whole segment is.
+  MseEngine.prototype.videoBuffered = function (sampleNum) {
+    var sb = this.buffers.video;
+    if (!sb || !sb.buffered.length || !sampleNum) return false;
+    var trak = this.mp4.getTrackById(this.videoTrackId);
+    var s = trak && trak.samples && trak.samples[sampleNum - 1];
+    if (!s || !s.timescale) return false;
+    var t = s.cts / s.timescale;
+    for (var i = 0; i < sb.buffered.length; i++) {
+      if (sb.buffered.start(i) - 0.05 <= t && t <= sb.buffered.end(i) + 0.05) return true;
+    }
+    return false;
   };
   MseEngine.prototype.enqueue = function (kind, buffer) {
     if (!buffer) return;
@@ -903,10 +932,18 @@
       if (!sb.updating && sb.buffered.length && sb.buffered.start(0) < keepFrom - 1) sb.remove(0, keepFrom);
     } catch (e) {}
   };
-  MseEngine.prototype.bufferedAheadSec = function () {
-    var sb = this.buffers.video;
+  // How far ahead BOTH tracks are buffered — the MIN, not just video. After an
+  // audio switch flushes the audio buffer, video is still buffered far ahead; if
+  // the pump throttled on video alone it would refuse to fetch and the flushed
+  // audio would never refill (a stall). Taking the min keeps the pump fetching
+  // until audio has caught up too.
+  MseEngine.prototype.aheadOf = function (kind) {
+    var sb = this.buffers[kind];
     if (!sb || !sb.buffered.length) return 0;
     return Math.max(0, sb.buffered.end(sb.buffered.length - 1) - (v.currentTime || 0));
+  };
+  MseEngine.prototype.bufferedAheadSec = function () {
+    return Math.min(this.aheadOf("video"), this.aheadOf("audio"));
   };
   // Sequential byte pump: fetch 2 MB windows over the channel, hand them to
   // mp4box (which returns the next offset it wants), stall while >90s is
@@ -993,30 +1030,25 @@
     catch (e) { trace("engine seek failed: " + e); return; }
     this.pump(seek.offset);
   };
-  // The whole point of the engine: switch audio without touching video. `index`
-  // is the app typeIndex == the mp4box audio-track array index (file order).
+  // Switch audio by rebuilding the pipeline at the current position with the new
+  // track (`index` = app typeIndex = mp4box audio-track array index, file order).
+  // A seamless in-place mp4box swap (flush audio + backward-seek refill) proved
+  // too fragile: backward seeks need releaseUsedSamples, and when the refill
+  // reaches EOF mp4.flush() emits a segment PER SAMPLE (thousands), flooding the
+  // append queue so audio lags the playhead → stalls. Reloading the (validated)
+  // forward-pump path at the current time is robust; video re-buffers briefly.
   MseEngine.prototype.setAudioTrack = function (index) {
-    var track = this.audioTracks[index];
-    if (!track || track.id === this.audioTrackId) return;
-    var sb = this.buffers.audio;
-    if (!sb) return;
-    this.audioTrackId = track.id;
-    this.wantAudioIndex = index;
-    var self = this;
-    var swap = function () {
-      if (sb.updating) { setTimeout(swap, 50); return; }
-      try { if (sb.buffered.length) sb.remove(0, self.mediaSource.duration || 1e9); } catch (e) {}
-      var append = function () {
-        if (sb.updating) { setTimeout(append, 50); return; }
-        try { if (sb.changeType) sb.changeType(self.audioMimeFor(track)); } catch (e) {}
-        self.queues.audio = [self.initSegs[track.id]];
-        self.drain("audio");
-        self.reposition((v.currentTime || 0) - 0.5);
-        trace("engine audio → #" + index + " (" + (track.language || "?") + ")");
-      };
-      append();
-    };
-    swap();
+    if (!this.audioTracks[index] || index === this.wantAudioIndex) return;
+    if (!currentMedia) return;
+    var at = v.currentTime || 0;
+    var keepSub = wantedSubtitle;   // preserve the subtitle choice across the reload
+    var m = {};
+    for (var k in currentMedia) m[k] = currentMedia[k];
+    m.audioTypeIndex = index;
+    m.startTime = at;
+    trace("engine audio → #" + index + " (reload @" + Math.round(at) + "s)");
+    loadMedia(m);                   // tears this engine down, builds a fresh one at `at`
+    wantedSubtitle = keepSub;       // sticky applySubtitles honours it once tracks load
   };
   MseEngine.prototype.destroy = function () {
     this.dead = true;
@@ -1027,6 +1059,9 @@
   };
 
   var engine = null;
+  // The last `load` command — an audio switch rebuilds the engine from it (at the
+  // live position, with the new audioTypeIndex), so it must be the current media.
+  var currentMedia = null;
   function teardownEngine() { if (engine) { try { engine.destroy(); } catch (e) {} engine = null; } }
   // A sender seek sets v.currentTime; when the engine drives playback it must
   // move the demux to match, or the video stalls at an unbuffered position.
@@ -1083,6 +1118,7 @@
   function loadMedia(m) {
     stopMedia();                 // pauses the old media → a final OLD-gen status
     stopped = false;             // a fresh load = active again (clears any prior stop)
+    currentMedia = m;            // remembered so an audio switch can rebuild from it
     currentGen = m.gen || 0;     // now the current load; new statuses carry this
     wantedSubtitle = -1;         // fresh media starts with subtitles off
     showVideo();
@@ -1190,8 +1226,6 @@
       play();
     }).catch(function (e) { fail("Couldn’t load media: " + (e && e.message || e)); });
   }
-
-  tap.addEventListener("click", function () { tap.classList.remove("show"); v.play().catch(function () {}); });
 
   // ---- A friendly "who's watching" label for the phone's UI -----------------
   // Best-effort browser · OS from the user agent — nothing identifying.
