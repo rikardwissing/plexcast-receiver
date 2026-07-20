@@ -940,7 +940,17 @@
   MseEngine.prototype.aheadOf = function (kind) {
     var sb = this.buffers[kind];
     if (!sb || !sb.buffered.length) return 0;
-    return Math.max(0, sb.buffered.end(sb.buffered.length - 1) - (v.currentTime || 0));
+    var now = v.currentTime || 0;
+    // Only the contiguous range containing the playhead is useful "ahead".
+    // After old media is evicted, a backward seek can sit before every buffered
+    // range; measuring to the final (stale future) range then makes the pump
+    // think it has >90s available and it never fetches the missing target.
+    for (var i = 0; i < sb.buffered.length; i++) {
+      if (sb.buffered.start(i) <= now && now <= sb.buffered.end(i)) {
+        return Math.max(0, sb.buffered.end(i) - now);
+      }
+    }
+    return 0;
   };
   MseEngine.prototype.bufferedAheadSec = function () {
     return Math.min(this.aheadOf("video"), this.aheadOf("audio"));
