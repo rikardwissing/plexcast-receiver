@@ -83,6 +83,14 @@
   #tap.show { display: flex; }
   #tap .btn { width: auto; padding: 0 32px; }
 
+  /* Reconnect overlay over the frozen video. */
+  #reconnect { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(11,12,24,0.58); -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px); z-index: 15; }
+  #reconnect.show { display: flex; }
+  #reconnect .rc-box { text-align: center; }
+  #reconnect .rc-title { margin-top: 14px; font-size: 18px; font-weight: 700; color: var(--ink); }
+  #reconnect .rc-sub { margin-top: 6px; font-size: 14px; color: var(--muted); }
+
   /* Paired senders on the landing: we're listening for their casts. */
   #pairs { margin: -8px 0 22px; text-align: left; }
   #pairs .pairhead { font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
@@ -120,6 +128,16 @@
 
   <div id="stage">
     <video id="v" class="hidden" playsinline controls></video>
+
+    <!-- Reconnect overlay: sits OVER the (frozen) video during a drop, so the
+         last frame stays visible instead of falling back to a card. -->
+    <div id="reconnect">
+      <div class="rc-box">
+        <div class="spinner"></div>
+        <div class="rc-title">Reconnecting…</div>
+        <div id="rc-sub" class="rc-sub"></div>
+      </div>
+    </div>
 
     <!-- Connecting / status -->
     <div id="panel" class="card">
@@ -198,35 +216,43 @@
   // Debounce so the data-channel close and the connection-failed event (both
   // fire on a drop) only tear down once.
   var disconnecting = false;
-  // In-place reconnect budget. A transient WebRTC drop (STUN-only + gatherOnce
-  // is fragile to NAT rebinding / Wi-Fi blips) shouldn't kick a live cast back
-  // to the code screen — the sender keeps its offer re-armed under the same
-  // room, so we re-run the handshake in place and playback resumes. Reset on a
-  // successful (re)connect; only give up after MAX_RECONNECT consecutive fails.
-  var reconnectAttempts = 0;
-  var MAX_RECONNECT = 3;
+  // Reconnect state. A live cast that drops (STUN-only + gatherOnce is fragile
+  // to NAT rebinding / Wi-Fi blips, or the sender briefly backgrounding) keeps
+  // its FROZEN last frame on screen under a "Reconnecting…" overlay — the video
+  // is never torn down — and re-runs the handshake on the same room (the sender
+  // keeps its offer re-armed) for up to RECONNECT_WINDOW_MS before giving up.
+  // Playback resumes where it left off (the sender re-sends its load at the last
+  // reported position).
+  var reconnecting = false;
+  var reconnectGen = 0;   // bumped per drop; a superseded loop bails
+  var RECONNECT_WINDOW_MS = 5 * 60 * 1000;
   // Set when the sender deliberately ends the cast ({t:"stop"}) — then a channel
   // close is expected and we should NOT try to reconnect.
   var stopped = false;
-  // The connection dropped after being live. Unless the sender stopped on
-  // purpose (or we've exhausted retries), reconnect in place on the same room;
-  // keep the "Reconnecting…" panel up meanwhile instead of dumping to the code
-  // entry.
-  function handleDrop() {
-    if (disconnecting) return;
-    disconnecting = true;
-    stopMedia();
-    try { if (window.PAGEPC) window.PAGEPC.close(); } catch (e) {}
-    pending = {};   // orphan any in-flight channel requests from the dead peer
-    dc = null;
-    wasConnected = false;
-    if (stopped || !room || reconnectAttempts >= MAX_RECONNECT) { giveUp(); return; }
-    reconnectAttempts++;
-    showPanel();
-    setStatus("Reconnecting…", "Lost the connection to " + sender +
-              " — retrying (" + reconnectAttempts + "/" + MAX_RECONNECT + ")");
-    // Give the sender a beat to re-arm its offer, then re-run the handshake.
-    setTimeout(function () { if (!stopped) start(1); }, 1200);
+  async function handleDrop() {
+    if (reconnecting) return;               // one loop owns retries; later drops feed back in
+    if (stopped || !room) { giveUp(); return; }
+    reconnecting = true;
+    var myGen = ++reconnectGen;
+    try { v.pause(); } catch (e) {}         // freeze the last frame — do NOT tear the video down
+    showReconnect("Lost the connection to " + sender);
+    var deadline = performance.now() + RECONNECT_WINDOW_MS;
+    var delay = 800;
+    while (reconnecting && reconnectGen === myGen && !stopped && performance.now() < deadline) {
+      try { if (window.PAGEPC) window.PAGEPC.close(); } catch (e) {}
+      pending = {};                         // orphan in-flight requests from the dead peer
+      dc = null;
+      wasConnected = false;
+      try { await connect(); } catch (e) {}
+      if (reconnectGen !== myGen) return;   // a newer drop took over while we awaited
+      if (wasConnected) break;              // reconnected — dc.onopen cleared the overlay
+      await new Promise(function (r) { setTimeout(r, delay); });
+      delay = Math.min(Math.round(delay * 1.5), 5000);   // back off, capped at 5s
+    }
+    if (reconnectGen !== myGen) return;
+    reconnecting = false;
+    hideReconnect();
+    if (!wasConnected) giveUp();            // window expired — the sender is really gone
   }
   // Sender stopped on purpose, or reconnection is exhausted — become a castable
   // device again: a paired page goes back to listening, a code/deep-link page
@@ -242,9 +268,14 @@
   var h1 = panel.querySelector("h1");
 
   function setStatus(main, sub) { if (main) h1.textContent = main; if (sub !== undefined) statusEl.textContent = sub; }
-  function showVideo() { v.classList.remove("hidden"); panel.classList.add("hidden"); entry.classList.add("hidden"); }
+  function showVideo() { v.classList.remove("hidden"); panel.classList.add("hidden"); entry.classList.add("hidden"); hideReconnect(); }
   function showPanel() { v.classList.add("hidden"); panel.classList.remove("hidden"); entry.classList.add("hidden");
     panel.querySelector(".spinner").style.display = ""; }
+  // The reconnect overlay sits OVER the video — it does not hide it, so the
+  // last frame stays frozen underneath while we re-handshake.
+  var reconnectEl = document.getElementById("reconnect");
+  function showReconnect(sub) { document.getElementById("rc-sub").textContent = sub || ""; reconnectEl.classList.add("show"); }
+  function hideReconnect() { reconnectEl.classList.remove("show"); }
   function fail(msg) { showPanel(); panel.querySelector(".spinner").style.display = "none"; setStatus("Can’t connect", msg); }
 
   // ---- Pairing: remember senders so they can cast here without a code -------
@@ -674,6 +705,9 @@
   // path wrote to the hidden panel — an eternal spinner), and tell the sender
   // so its UI can say why nothing is playing.
   function playbackError(detail) {
+    // While reconnecting, the dead channel makes the (still-mounted) hls throw —
+    // ignore it so the frozen frame + overlay stay put instead of a "can't play" card.
+    if (reconnecting) return;
     clearStall();
     if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
     v.pause(); v.removeAttribute("src"); v.load();
@@ -882,7 +916,8 @@
       };
       dc.onopen = function () {
         wasConnected = true;
-        reconnectAttempts = 0;   // a live channel — refresh the reconnect budget
+        reconnecting = false;   // reconnected — stop the loop and drop the overlay now
+        hideReconnect();
         setStatus("Connected", "Waiting for " + sender + " to start a video…");
         // The hello carries the pairing tokens this browser holds, so a sender
         // that already knows one recognises us and reuses it — connecting with
