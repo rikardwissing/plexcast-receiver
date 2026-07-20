@@ -1078,11 +1078,21 @@
   // subtitleTrack message that lands BEFORE the async <track>s are built (iOS
   // carries a subtitle choice into the load) still takes effect once they load.
   var wantedSubtitle = -1;
+  // True while WE are mutating <track>s (build/select/clear). The textTracks
+  // "change" listener ignores changes during this window so our own async
+  // track-loading transitions don't look like a viewer picking a track.
+  var applyingSubs = false, applyTimer = null;
+  function beginSubMutation() {
+    applyingSubs = true;
+    if (applyTimer) clearTimeout(applyTimer);
+    applyTimer = setTimeout(function () { applyingSubs = false; }, 400);
+  }
   function trackMode(el) {
     var ti = parseInt(el.getAttribute("data-typeindex"), 10);
     return (wantedSubtitle >= 0 && ti === wantedSubtitle) ? "showing" : "disabled";
   }
   function clearSubtitles() {
+    beginSubMutation();
     var tracks = v.querySelectorAll("track");
     for (var i = 0; i < tracks.length; i++) v.removeChild(tracks[i]);
     for (var j = 0; j < subBlobs.length; j++) { try { URL.revokeObjectURL(subBlobs[j]); } catch (e) {} }
@@ -1093,6 +1103,7 @@
     if (!list || !list.length) return;
     list.forEach(function (s) {
       fetchOverChannel(s.url, {}).then(function (r) {
+        beginSubMutation();   // extend the guard as each async track lands
         var url = URL.createObjectURL(new Blob([r.data], { type: "text/vtt" }));
         subBlobs.push(url);
         var t = document.createElement("track");
@@ -1108,11 +1119,51 @@
   }
   // Show the <track> whose app typeIndex matches (others disabled); -1 = all off.
   function selectSubtitle(typeIndex) {
+    beginSubMutation();
     wantedSubtitle = (typeIndex == null) ? -1 : typeIndex;
     var tracks = v.querySelectorAll("track");
     for (var i = 0; i < tracks.length; i++) {
       try { tracks[i].track.mode = trackMode(tracks[i]); } catch (e) {}
     }
+  }
+  // Force exactly `wantedSubtitle` to show and everything else off. Browsers with
+  // a captions/language preference auto-set a matching track to "showing" behind
+  // our back (→ double subtitles); this re-asserts our single selection. Guarded
+  // so its own mode writes don't re-enter the textTracks "change" handler.
+  var enforcingSubs = false;
+  function enforceSingleSubtitle() {
+    if (enforcingSubs) return;
+    enforcingSubs = true;
+    var tracks = v.querySelectorAll("track");
+    for (var i = 0; i < tracks.length; i++) {
+      var want = trackMode(tracks[i]);
+      try { if (tracks[i].track.mode !== want) tracks[i].track.mode = want; } catch (e) {}
+    }
+    enforcingSubs = false;
+  }
+  // Viewer changed subtitles via the receiver's own <video controls> CC menu →
+  // tell the sender so its menu checkmark follows (two-way sync). During our own
+  // mutations (applyingSubs) or a browser auto-show, just re-enforce our choice.
+  if (v.textTracks) {
+    v.textTracks.addEventListener("change", function () {
+      if (enforcingSubs) return;
+      if (applyingSubs) { enforceSingleSubtitle(); return; }   // browser auto-show during load → correct
+      var showingList = [], tracks = v.querySelectorAll("track");
+      for (var i = 0; i < tracks.length; i++) {
+        if (tracks[i].track.mode === "showing") showingList.push(parseInt(tracks[i].getAttribute("data-typeindex"), 10));
+      }
+      // Already exactly our selection? (nothing showing when off; one track = us.)
+      var ok = (wantedSubtitle < 0) ? showingList.length === 0
+                                    : (showingList.length === 1 && showingList[0] === wantedSubtitle);
+      if (ok) return;
+      // The viewer's new pick = a showing track that isn't our current one; if
+      // nothing (or only our old one) is showing, treat it as off.
+      var pick = -1;
+      for (var j = 0; j < showingList.length; j++) { if (showingList[j] !== wantedSubtitle) { pick = showingList[j]; break; } }
+      wantedSubtitle = pick;
+      enforceSingleSubtitle();                  // collapse to exactly the pick (kills any extra)
+      if (channelReady()) { try { dc.send(JSON.stringify({ t: "pickSubtitle", typeIndex: pick })); } catch (e) {} }
+    });
   }
 
   function loadMedia(m) {
@@ -1120,7 +1171,9 @@
     stopped = false;             // a fresh load = active again (clears any prior stop)
     currentMedia = m;            // remembered so an audio switch can rebuild from it
     currentGen = m.gen || 0;     // now the current load; new statuses carry this
-    wantedSubtitle = -1;         // fresh media starts with subtitles off
+    // Start on the subtitle the sender picked (the user's choice for this file,
+    // = the sender menu), else off. Sticky applySubtitles enables it on load.
+    wantedSubtitle = (m.subtitleTypeIndex != null) ? m.subtitleTypeIndex : -1;
     showVideo();
     setPoster(m.poster);
     var startTime = m.startTime || 0;
