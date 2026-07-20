@@ -99,6 +99,15 @@
   .pairrow .forget { flex: none; border: 0; background: transparent; color: var(--muted);
     font-size: 17px; cursor: pointer; padding: 2px 6px; border-radius: 8px; }
   .pairrow .forget:hover { color: var(--ink); background: rgba(255,255,255,0.08); }
+  #scan { margin-top: 22px; }
+  .scanor { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 2px;
+    margin: 0 0 16px; position: relative; }
+  .scanor::before, .scanor::after { content: ""; position: absolute; top: 50%; width: 32%;
+    height: 1px; background: rgba(255,255,255,0.12); }
+  .scanor::before { left: 0; } .scanor::after { right: 0; }
+  #qr { width: 180px; height: 180px; margin: 0 auto 16px; padding: 12px; border-radius: 16px;
+    background: #fff; box-sizing: border-box; }
+  #qr img, #qr canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
 </style>
 </head>
 <body>
@@ -140,11 +149,17 @@
         <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code" aria-label="Cast code">
       </div>
       <button id="go" class="btn" disabled>Watch</button>
+      <div id="scan" class="hidden">
+        <p class="scanor">or</p>
+        <div id="qr" aria-label="Pairing QR code"></div>
+        <p class="sub">Scan with the Plex Downloader app (or your camera) to connect this screen — no typing.</p>
+      </div>
     </div>
   </div>
   <div id="tap"><div class="btn">▶ Tap to start</div></div>
 
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <script>
 (function () {
   "use strict";
@@ -316,6 +331,22 @@
     renderPairs();
     beaconPresence(true);   // the landing is listening — senders may list us
 
+    // Reverse pairing: mint a rendezvous code and show it as a QR. The phone
+    // scans it (in-app, or the system camera opens the deep link) and casts to
+    // this screen — no code typed here. We poll this room like a pairing token.
+    var scanRoom = "";
+    (function setupScanQR() {
+      if (typeof qrcode !== "function") return;   // lib offline → code entry still works
+      scanRoom = "s" + Math.random().toString(36).slice(2, 10);
+      try {
+        var qr = qrcode(0, "M");
+        qr.addData("plexdownloader://pair?r=" + scanRoom);
+        qr.make();
+        document.getElementById("qr").innerHTML = qr.createImgTag(5, 0);
+        document.getElementById("scan").classList.remove("hidden");
+      } catch (e) { scanRoom = ""; }
+    })();
+
     // After an orphaned answer (a corpse offer, nobody reading), come back
     // here: show the landing again and keep listening for a REAL cast.
     resumeListening = function () {
@@ -333,7 +364,10 @@
       window.PLEXCAST_POLLS = (window.PLEXCAST_POLLS || 0) + 1;   // QA observable
       window.PLEXCAST_POLLSTATE = { submitted: submitted, busy: pollBusy };
       if (submitted || pollBusy) return;
-      var pairs = loadPairs();
+      // Poll the paired-sender tokens AND our own scan-QR rendezvous room; the
+      // first live offer wins.
+      var pairs = loadPairs().slice();
+      if (scanRoom) pairs.push({ id: scanRoom, name: "your phone" });
       if (!pairs.length) return;
       pollBusy = true;
       var waiting = pairs.length, done = false;
