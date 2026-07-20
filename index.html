@@ -452,15 +452,6 @@
       var msg = { t: "req", id: id, path: path };
       if (opts.start != null) msg.start = opts.start;
       if (opts.end != null) msg.end = opts.end;
-      // DIAGNOSTIC: record subtitle-related channel requests + their outcome/timing.
-      if (/sub\d+\.(m3u8|vtt)/i.test(path)) {
-        var t0 = performance.now();
-        (window.__CHREQ = window.__CHREQ || []).push({ path: path, start: opts.start, end: opts.end, status: "sent" });
-        var rec = window.__CHREQ[window.__CHREQ.length - 1];
-        var origRes = pending[id].resolve, origRej = pending[id].reject;
-        pending[id].resolve = function (r) { rec.status = "ok"; rec.bytes = r.data.length; rec.ms = Math.round(performance.now() - t0); origRes(r); };
-        pending[id].reject = function (e) { rec.status = "err:" + (e && e.message); rec.ms = Math.round(performance.now() - t0); origRej(e); };
-      }
       dc.send(JSON.stringify(msg));
     });
   }
@@ -729,16 +720,6 @@
     if (isHls) {
       if (!window.Hls || !window.Hls.isSupported()) { fail("This browser can’t play the stream (no MSE)."); return; }
       hls = new window.Hls({ loader: DataChannelLoader, enableWorker: false });
-      // DIAGNOSTIC: expose hls + log the subtitle lifecycle so a cast can be inspected.
-      window.hls = hls;
-      window.__SUBLOG = [];
-      function slog(m) { window.__SUBLOG.push(m); }
-      ["SUBTITLE_TRACKS_UPDATED","SUBTITLE_TRACK_SWITCH","SUBTITLE_TRACK_LOADED","SUBTITLE_FRAG_PROCESSED"].forEach(function (name) {
-        if (window.Hls.Events[name]) hls.on(window.Hls.Events[name], function (e, d) {
-          slog(name + (d && d.id != null ? " id=" + d.id : "") + (d && d.details && d.details.fragments ? " frags=" + d.details.fragments.length : ""));
-        });
-      });
-      hls.on(window.Hls.Events.ERROR, function (e, d) { if (d && (d.fatal || /subtitle|frag|parse|timestamp/i.test(d.details || ""))) slog("ERROR " + d.details + " fatal=" + d.fatal); });
       hls.loadSource(m.url);
       hls.attachMedia(v);
       hls.on(window.Hls.Events.MANIFEST_PARSED, function (evt, data) {
