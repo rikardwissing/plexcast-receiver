@@ -116,12 +116,44 @@ try {
     args: ["--no-sandbox", "--autoplay-policy=no-user-gesture-required"],
   });
   const page = await browser.newPage();
-  await page.goto(`${origin}/?qa=1&sig=${encodeURIComponent("http://127.0.0.1:1")}`);
+  await page.goto(`${origin}/?qa=1&requestIdleMs=80&sig=${encodeURIComponent("http://127.0.0.1:1")}`);
   await page.waitForFunction(() => Boolean(window.PLEXCAST_QA?.MseEngine));
+
+  // A data channel that remains nominally open but returns no bytes must reject
+  // the request and send an abort instead of leaving it pending forever.
+  const timeoutResult = await page.evaluate(async () => {
+    const sent = [];
+    const channel = { readyState: "open", send: (message) => { sent.push(JSON.parse(message)); } };
+    window.PLEXCAST_QA.setDataChannel(channel);
+    let error = "";
+    try { await window.PLEXCAST_QA.fetchOverChannel("/never-answers", {}); }
+    catch (caught) { error = String(caught); }
+    window.PLEXCAST_QA.setDataChannel(null);
+    return {
+      error,
+      pending: window.PLEXCAST_QA.pendingCount(),
+      sent,
+      trace: window.PLEXCAST_TRACE.slice(),
+    };
+  });
+  assert(timeoutResult.error.includes("made no progress"),
+    `idle request did not time out: ${JSON.stringify(timeoutResult)}`);
+  assert(timeoutResult.pending === 0, "timed-out request remained pending");
+  assert(timeoutResult.sent.some((message) => message.t === "abort"),
+    "timed-out request did not abort the sender operation");
+
   await page.evaluate(() => {
     const video = window.PLEXCAST_QA.video;
     video.muted = true;
+    window.PLEXCAST_QA.injectedFetchFailure = false;
     const fetchRange = async (url, options) => {
+      // The MSE byte pump must retry at the same offset after a transient
+      // transport failure; before this regression fix one rejection ended the
+      // pump permanently and playback stalled once the existing buffer drained.
+      if (!window.PLEXCAST_QA.injectedFetchFailure) {
+        window.PLEXCAST_QA.injectedFetchFailure = true;
+        throw new Error("injected transport timeout");
+      }
       const response = await fetch(url, {
         headers: { Range: `bytes=${options.start}-${options.end}` },
       });
@@ -179,11 +211,16 @@ try {
   assert(result.emptied === 0, "audio switching emptied/reloaded the video element");
   assert(result.trace.filter((line) => line.includes("(native,")).length >= 3,
     `not every audio change completed through the native path: ${result.trace.join(" | ")}`);
+  assert(result.trace.some((line) => line.includes("injected transport timeout") && line.includes("retrying")),
+    `MSE pump did not retry the injected transport failure: ${result.trace.join(" | ")}`);
   assert(!result.trace.some((line) => line.includes("native audio fallback")),
     "native switching fell back to a full media reload");
   console.log("direct-MP4 native audio switching smoke test passed");
 } finally {
   await browser?.close();
-  await new Promise((resolve) => server?.close(resolve));
+  if (server) {
+    server.closeIdleConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+  }
   await rm(tempRoot, { recursive: true, force: true });
 }

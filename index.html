@@ -182,7 +182,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 7;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 8;   // bump when debugging cached-page confusion
   var qs = new URLSearchParams(location.search);
   // sig = signalling mailbox; defaults to the app's built-in Worker so a plain
   // link (page + #code) needs no query. room = the short code from the hash,
@@ -238,7 +238,7 @@
     var delay = 800;
     while (reconnecting && reconnectGen === myGen && !stopped && performance.now() < deadline) {
       try { if (window.PAGEPC) window.PAGEPC.close(); } catch (e) {}
-      pending = {};                         // orphan in-flight requests from the dead peer
+      rejectAllPending(new Error("connection closed"));
       dc = null;
       wasConnected = false;
       try { await connect(); } catch (e) {}
@@ -554,21 +554,63 @@
   // LE id prefix), an empty-body chunk marking EOF. Multiple requests can be
   // in flight; each is keyed by id.
   var reqId = 1;
-  var pending = {};   // id -> {resolve, reject, meta, chunks, got}
+  var pending = {};   // id -> {resolve, reject, meta, chunks, got, timer, channel}
+  // This is an INACTIVITY deadline, not a whole-request deadline. Every header
+  // and body chunk rearms it, so a slow link may take as long as it needs while
+  // a wedged SCTP request cannot strand the MSE pump forever. QA may shorten it.
+  var requestIdleOverride = new URL(location.href).searchParams.get("requestIdleMs");
+  var REQUEST_IDLE_MS = requestIdleOverride && new URL(location.href).searchParams.get("qa") === "1"
+    ? Math.max(25, Number(requestIdleOverride) || 15000) : 15000;
 
   function channelReady() { return dc && dc.readyState === "open"; }
+
+  function clearRequestTimer(p) {
+    if (p && p.timer) { clearTimeout(p.timer); p.timer = null; }
+  }
+  function rejectPending(id, error, sendAbort) {
+    var p = pending[id];
+    if (!p) return;
+    delete pending[id];
+    clearRequestTimer(p);
+    if (sendAbort && p.channel && p.channel.readyState === "open") {
+      try { p.channel.send(JSON.stringify({ t: "abort", id: id })); } catch (e) {}
+    }
+    p.reject(error);
+  }
+  function rejectAllPending(error) {
+    var ids = Object.keys(pending);
+    for (var i = 0; i < ids.length; i++) rejectPending(Number(ids[i]), error, false);
+  }
+  function armRequestTimer(id) {
+    var p = pending[id];
+    if (!p) return;
+    clearRequestTimer(p);
+    p.timer = setTimeout(function () {
+      if (pending[id] !== p) return;
+      trace("request #" + id + " idle for " + REQUEST_IDLE_MS + "ms — recovering channel");
+      rejectPending(id, new Error("request made no progress"), true);
+      // Closing/re-answering the peer is the only way to recover a data channel
+      // that still reports `open` while its SCTP send queue is wedged. A landing
+      // page has no room and uses this helper only in QA, so do not navigate it.
+      if (room) handleDrop();
+    }, REQUEST_IDLE_MS);
+  }
 
   function fetchOverChannel(path, opts) {
     opts = opts || {};
     return new Promise(function (resolve, reject) {
       if (!channelReady()) { reject(new Error("channel closed")); return; }
       var id = reqId++;
-      pending[id] = { resolve: resolve, reject: reject, meta: null, chunks: [], got: 0 };
+      var requestChannel = dc;
+      pending[id] = { resolve: resolve, reject: reject, meta: null, chunks: [], got: 0,
+                      timer: null, channel: requestChannel };
       if (opts.onId) opts.onId(id);
       var msg = { t: "req", id: id, path: path };
       if (opts.start != null) msg.start = opts.start;
       if (opts.end != null) msg.end = opts.end;
-      dc.send(JSON.stringify(msg));
+      armRequestTimer(id);
+      try { requestChannel.send(JSON.stringify(msg)); }
+      catch (e) { rejectPending(id, e, false); }
     });
   }
 
@@ -576,8 +618,7 @@
   // stops streaming bytes we no longer want and can serve the new fragment now.
   function cancelRequest(id) {
     if (id == null) return;
-    if (pending[id]) { delete pending[id]; }
-    if (channelReady()) dc.send(JSON.stringify({ t: "abort", id: id }));
+    rejectPending(id, new Error("request cancelled"), true);
   }
 
   // Find the hls.js audio/subtitle track whose rendition encodes the app
@@ -653,12 +694,12 @@
         break;
       case "res": {
         var p = pending[obj.id];
-        if (p) p.meta = obj;
+        if (p) { p.meta = obj; armRequestTimer(obj.id); }
         break;
       }
       case "err": {
         var pe = pending[obj.id];
-        if (pe) { delete pending[obj.id]; pe.reject(new Error("status " + obj.status)); }
+        if (pe) rejectPending(obj.id, new Error("status " + obj.status), false);
         break;
       }
     }
@@ -674,6 +715,7 @@
     if (buf.byteLength === 4) {
       // EOF — assemble.
       delete pending[id];
+      clearRequestTimer(p);
       var total = p.got;
       var out = new Uint8Array(total);
       var off = 0;
@@ -683,6 +725,7 @@
       var chunk = new Uint8Array(buf, 4);
       p.chunks.push(chunk);
       p.got += chunk.length;
+      armRequestTimer(id);
     }
   }
 
@@ -1050,6 +1093,7 @@
   MseEngine.prototype.pump = async function (offset) {
     var gen = ++this.fetchGen;
     var CHUNK = 2 * 1024 * 1024;
+    var failures = 0;
     this.fetchOffset = offset;
     while (!this.dead && gen === this.fetchGen) {
       if (this.bufferedAheadSec() > 90) {
@@ -1068,9 +1112,16 @@
         buf = r.data.buffer;
       } catch (e) {
         if (this.dead || gen !== this.fetchGen) return;
-        trace("engine fetch failed @" + this.fetchOffset + ": " + e); return;
+        this.inflightId = null;
+        failures++;
+        var delay = Math.min(250 * Math.pow(2, Math.min(failures - 1, 4)), 4000);
+        trace("engine fetch failed @" + this.fetchOffset + ": " + e +
+              " — retrying in " + delay + "ms");
+        await new Promise(function (resolve) { setTimeout(resolve, delay); });
+        continue;
       }
       if (this.dead || gen !== this.fetchGen) return;
+      failures = 0;
       // appendBuffer already emits a final partial segment when it reaches the
       // track's last sample. MP4Box.flush() forces processSamples(true), which
       // emits one fragment PER remaining sample after a reposition and can flood
@@ -1352,7 +1403,13 @@
   // cannot mutate its audio SourceBuffer or a native refill times out.
   var currentMedia = null;
   if (new URL(location.href).searchParams.get("qa") === "1") {
-    window.PLEXCAST_QA = { MseEngine: MseEngine, video: v };
+    window.PLEXCAST_QA = {
+      MseEngine: MseEngine,
+      video: v,
+      fetchOverChannel: fetchOverChannel,
+      setDataChannel: function (channel) { dc = channel; },
+      pendingCount: function () { return Object.keys(pending).length; },
+    };
   }
   function teardownEngine() { if (engine) { try { engine.destroy(); } catch (e) {} engine = null; } }
   // A sender seek sets v.currentTime; when the engine drives playback it must

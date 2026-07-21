@@ -62,6 +62,8 @@ the absence of the old polling loop, and the outage message.
 `npm run test:mse` uses FFmpeg to generate a temporary two-audio-track MP4,
 streams it through the real MP4Box/MediaSource engine in Chrome, and verifies
 repeated and rapid audio changes without replacing or emptying the video source.
+It also verifies that an idle data-channel request times out and aborts cleanly,
+and that the MSE byte pump retries a transient range failure at the same offset.
 
 ## Deploy
 
