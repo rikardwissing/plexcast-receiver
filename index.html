@@ -182,7 +182,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 6;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 7;   // bump when debugging cached-page confusion
   var qs = new URLSearchParams(location.search);
   // sig = signalling mailbox; defaults to the app's built-in Worker so a plain
   // link (page + #code) needs no query. room = the short code from the hash,
@@ -861,13 +861,14 @@
   // A muxed MP4 on native <video> exposes only its default audio. For a file the
   // sender flags {mse:true} we demux it with mp4box.js — pulling 2 MB byte
   // windows over THIS data channel instead of HTTP — and feed two SourceBuffers.
-  // Every audio track is fragmented up front (unselected tracks are dropped as
-  // they arrive), so a switch is: flush the audio buffer, append the other
-  // track's init segment, re-extract from the current position — video is never
-  // reloaded. This is the Chromecast receiver's engine (receiver/receiver.js)
-  // adapted from `fetch(Range)` to `fetchOverChannel`.
-  function MseEngine(path, audioTypeIndex) {
+  // We generate an init segment for every audio track but fragment only the
+  // active one. A switch pauses at the live position, replaces just the audio
+  // SourceBuffer contents, and refills that track — the video URL and buffered
+  // video never change. This is the Chromecast receiver's engine
+  // (receiver/receiver.js) adapted from `fetch(Range)` to fetchOverChannel.
+  function MseEngine(path, audioTypeIndex, fetcher) {
     this.path = path;
+    this.fetcher = fetcher || fetchOverChannel;
     this.wantAudioIndex = audioTypeIndex || 0;
     this.mediaSource = new MediaSource();
     this.objectUrl = URL.createObjectURL(this.mediaSource);
@@ -881,9 +882,23 @@
     this.fetchOffset = 0;
     this.fetchGen = 0;        // bumped to cancel an in-flight pump
     this.inflightId = null;   // the data-channel request id currently fetching
+    this.sourceOpened = false;
+    this.audioSwitching = false;
+    this.audioBufferLocked = false;
+    this.pendingAudioIndex = null;
+    this.resumeAfterAudioSwitch = false;
+    this.switchSerial = 0;
+    this.audioSegmentSamples = 48;
     this.dead = false;
     var self = this;
-    this.mediaSource.addEventListener("sourceopen", function () { self.onSourceOpen(); });
+    // Appending after endOfStream() transitions MSE back to "open" and fires
+    // sourceopen again. Initialising MP4Box a second time starts a competing pump
+    // at byte zero, which was one of the old switch-stall failure modes.
+    this.mediaSource.addEventListener("sourceopen", function () {
+      if (self.sourceOpened) return;
+      self.sourceOpened = true;
+      self.onSourceOpen();
+    });
   }
   MseEngine.prototype.onSourceOpen = function () {
     var self = this;
@@ -923,14 +938,20 @@
     ["video", "audio"].forEach(function (kind) {
       self.buffers[kind].addEventListener("updateend", function () { self.drain(kind); });
     });
-    // Fragment video + EVERY audio track; unselected audio is dropped in
-    // onSegment, so a later switch only needs a refill from the live position.
+    // Ask for every audio track just long enough to generate its init segment,
+    // then segment only the active one. The old engine kept all audio tracks
+    // active and discarded their output; repeated seeks therefore advanced and
+    // reset several independent sample cursors and could strand the chosen track
+    // at a stale byte frontier.
     this.mp4.setSegmentOptions(video.id, null, { nbSamples: 100 });
     for (var i = 0; i < this.audioTracks.length; i++) {
-      this.mp4.setSegmentOptions(this.audioTracks[i].id, null, { nbSamples: 100 });
+      this.mp4.setSegmentOptions(this.audioTracks[i].id, null, { nbSamples: this.audioSegmentSamples });
     }
     var segs = this.mp4.initializeSegmentation();
     for (var j = 0; j < segs.length; j++) this.initSegs[segs[j].id] = segs[j].buffer;
+    for (var k = 0; k < this.audioTracks.length; k++) {
+      if (this.audioTracks[k].id !== audio.id) this.mp4.unsetSegmentOptions(this.audioTracks[k].id);
+    }
     this.enqueue("video", this.initSegs[video.id]);
     this.enqueue("audio", this.initSegs[audio.id]);
     this.mp4.start();
@@ -981,6 +1002,9 @@
     // EOF can refill. Bailing on "ended" here would deadlock (nothing ever
     // re-opens it), stalling playback forever on a switch at/after full buffering.
     if (this.dead || !sb || sb.updating || this.mediaSource.readyState === "closed") return;
+    // The switch state machine mutates the audio SourceBuffer directly. Keep
+    // normal append-queue traffic out until remove/changeType/init has finished.
+    if (kind === "audio" && this.audioBufferLocked) return;
     var next = this.queues[kind].shift();
     if (!next) return;
     try { sb.appendBuffer(next); }
@@ -1036,20 +1060,27 @@
       var buf;
       try {
         var self = this;
-        var r = await fetchOverChannel(this.path, {
+        var r = await this.fetcher(this.path, {
           start: this.fetchOffset, end: this.fetchOffset + CHUNK - 1,
           onId: function (id) { self.inflightId = id; },
         });
         this.inflightId = null;
         buf = r.data.buffer;
-      } catch (e) { trace("engine fetch failed @" + this.fetchOffset + ": " + e); return; }
+      } catch (e) {
+        if (this.dead || gen !== this.fetchGen) return;
+        trace("engine fetch failed @" + this.fetchOffset + ": " + e); return;
+      }
       if (this.dead || gen !== this.fetchGen) return;
-      if (!buf.byteLength) { this.mp4.flush(); this.endStreamWhenDrained(gen); return; }  // EOF
+      // appendBuffer already emits a final partial segment when it reaches the
+      // track's last sample. MP4Box.flush() forces processSamples(true), which
+      // emits one fragment PER remaining sample after a reposition and can flood
+      // the queue with thousands of appends during an audio switch.
+      if (!buf.byteLength) { this.endStreamWhenDrained(gen); return; }  // EOF
       buf.fileStart = this.fetchOffset;
       var next = this.mp4.appendBuffer(buf);
       // appendBuffer can fire onReady, whose reposition() supersedes THIS pump.
       if (this.dead || gen !== this.fetchGen) return;
-      if (buf.byteLength < CHUNK) { this.mp4.flush(); this.endStreamWhenDrained(gen); return; }  // short read = EOF
+      if (buf.byteLength < CHUNK) { this.endStreamWhenDrained(gen); return; }  // short read = EOF
       this.fetchOffset = (typeof next === "number") ? next : this.fetchOffset + buf.byteLength;
     }
   };
@@ -1063,8 +1094,8 @@
     };
     tryEnd();
   };
-  // Free every already-extracted sample's data and reset its read cursor. This
-  // is what makes a BACKWARD seek possible: mp4box.seek skips samples still
+  // Free one track's already-extracted sample data and reset its read cursor.
+  // This is what makes a BACKWARD seek possible: MP4Box skips samples still
   // marked "fully read", so without this a seek to a time behind the parse head
   // (an audio switch's refill, or a user scrubbing back) returns the forward
   // parse cursor instead of the target's real byte offset — the switched track
@@ -1072,12 +1103,9 @@
   // also bounds memory over a long stream. (The Chromecast engine omits this;
   // over the data channel, with re-fetch on reposition, it's both safe and
   // necessary.)
-  MseEngine.prototype.releaseConsumed = function () {
-    var ids = [this.videoTrackId];
-    for (var a = 0; a < this.audioTracks.length; a++) ids.push(this.audioTracks[a].id);
-    for (var k = 0; k < ids.length; k++) {
-      var trak = this.mp4.getTrackById(ids[k]);
-      if (!trak || !trak.samples) continue;
+  MseEngine.prototype.releaseTrack = function (id) {
+      var trak = id != null && this.mp4.getTrackById(id);
+      if (!trak || !trak.samples) return;
       // Release up to the HIGHEST sample read at all — not just the contiguous
       // prefix — and reset lastValidSample so samples a PRIOR refill re-read get
       // released again. mp4box.releaseUsedSamples only moves its lastValidSample
@@ -1089,8 +1117,33 @@
       for (var i = 0; i < trak.samples.length; i++) {
         if (trak.samples[i].alreadyRead > 0) upto = i + 1;
       }
-      if (upto > 0) { trak.lastValidSample = 0; try { this.mp4.releaseUsedSamples(ids[k], upto); } catch (e) {} }
+      if (upto > 0) { trak.lastValidSample = 0; try { this.mp4.releaseUsedSamples(id, upto); } catch (e) {} }
+  };
+  MseEngine.prototype.releaseConsumed = function () {
+    this.releaseTrack(this.videoTrackId);
+    this.releaseTrack(this.audioTrackId);
+  };
+  // MP4Box.seek() moves EVERY track in the file, including inactive audio and
+  // subtitle tracks. Seek only the tracks this MSE presentation actually feeds.
+  // For an audio-only refill, leave video's nextSample at its buffered frontier.
+  MseEngine.prototype.seekOffset = function (timeSec, includeVideo) {
+    var ids = includeVideo ? [this.videoTrackId, this.audioTrackId] : [this.audioTrackId];
+    var offset = Infinity;
+    for (var i = 0; i < ids.length; i++) {
+      var trak = ids[i] != null && this.mp4.getTrackById(ids[i]);
+      if (!trak) continue;
+      try {
+        var seek = this.mp4.seekTrack(Math.max(0, timeSec), ids[i] === this.videoTrackId, trak);
+        if (seek && seek.offset < offset) offset = seek.offset;
+      } catch (e) { trace("engine track seek failed: " + e); }
     }
+    if (offset === Infinity) return this.mp4.nextParsePosition || 0;
+    try { return this.mp4.stream.getEndFilePositionAfter(offset); }
+    catch (e) { return offset; }
+  };
+  MseEngine.prototype.cancelPump = function () {
+    this.fetchGen++;
+    if (this.inflightId != null) { cancelRequest(this.inflightId); this.inflightId = null; }
   };
   // Reposition the demux (post-index start, sender seek, or audio-switch refill).
   // Release consumed samples first so mp4box maps the time to the real previous-
@@ -1098,35 +1151,196 @@
   // the sender stops streaming bytes we're leaving; then re-pump from there —
   // re-extracted video just overwrites itself in MSE.
   MseEngine.prototype.reposition = function (timeSec) {
-    if (this.inflightId != null) { cancelRequest(this.inflightId); this.inflightId = null; }
+    if (this.audioSwitching) return;
+    this.cancelPump();
     this.releaseConsumed();
-    var seek;
-    try { seek = this.mp4.seek(Math.max(0, timeSec), true); }
-    catch (e) { trace("engine seek failed: " + e); return; }
-    this.pump(seek.offset);
+    this.pump(this.seekOffset(timeSec, true));
   };
-  // Switch audio by rebuilding the pipeline at the current position with the new
-  // track (`index` = app typeIndex = mp4box audio-track array index, file order).
-  // A seamless in-place mp4box swap (flush audio + backward-seek refill) proved
-  // too fragile: backward seeks need releaseUsedSamples, and when the refill
-  // reaches EOF mp4.flush() emits a segment PER SAMPLE (thousands), flooding the
-  // append queue so audio lags the playhead → stalls. Reloading the (validated)
-  // forward-pump path at the current time is robust; video re-buffers briefly.
-  MseEngine.prototype.setAudioTrack = function (index) {
-    if (!this.audioTracks[index] || index === this.wantAudioIndex) return;
-    if (!currentMedia) return;
-    var at = v.currentTime || 0;
-    var keepSub = wantedSubtitle;   // preserve the subtitle choice across the reload
+  MseEngine.prototype.waitForIdle = function (sb) {
+    var self = this;
+    return new Promise(function (resolve) {
+      if (self.dead || !sb || !sb.updating) { resolve(!self.dead); return; }
+      var timer;
+      var done = function () {
+        clearTimeout(timer);
+        sb.removeEventListener("updateend", done);
+        sb.removeEventListener("error", done);
+        resolve(!self.dead);
+      };
+      sb.addEventListener("updateend", done);
+      sb.addEventListener("error", done);
+      timer = setTimeout(done, 3000);
+    });
+  };
+  MseEngine.prototype.appendDirect = async function (sb, buffer, serial) {
+    if (!buffer || !(await this.waitForIdle(sb)) || this.dead || serial !== this.switchSerial) return false;
+    var self = this;
+    return new Promise(function (resolve) {
+      var timer;
+      var finish = function (ok) {
+        clearTimeout(timer);
+        sb.removeEventListener("updateend", onEnd);
+        sb.removeEventListener("error", onError);
+        resolve(ok && !self.dead && serial === self.switchSerial);
+      };
+      var onEnd = function () { finish(true); };
+      var onError = function () { finish(false); };
+      sb.addEventListener("updateend", onEnd);
+      sb.addEventListener("error", onError);
+      timer = setTimeout(function () { finish(!sb.updating); }, 3000);
+      try { sb.appendBuffer(buffer); }
+      catch (e) { trace("engine direct append failed: " + e); finish(false); }
+    });
+  };
+  MseEngine.prototype.removeAudioDirect = async function (sb, serial) {
+    if (!(await this.waitForIdle(sb)) || this.dead || serial !== this.switchSerial) return false;
+    if (!sb.buffered.length) return true;
+    var end = sb.buffered.end(sb.buffered.length - 1) + 1;
+    if (isFinite(this.mediaSource.duration)) end = Math.max(end, this.mediaSource.duration);
+    var self = this;
+    return new Promise(function (resolve) {
+      var timer;
+      var finish = function (ok) {
+        clearTimeout(timer);
+        sb.removeEventListener("updateend", onEnd);
+        sb.removeEventListener("error", onError);
+        resolve(ok && !self.dead && serial === self.switchSerial);
+      };
+      var onEnd = function () { finish(true); };
+      var onError = function () { finish(false); };
+      sb.addEventListener("updateend", onEnd);
+      sb.addEventListener("error", onError);
+      timer = setTimeout(function () { finish(!sb.updating); }, 3000);
+      try { sb.remove(0, end); }
+      catch (e) { trace("engine audio remove failed: " + e); finish(false); }
+    });
+  };
+  MseEngine.prototype.audioCovers = function (timeSec) {
+    var sb = this.buffers.audio;
+    if (!sb) return false;
+    for (var i = 0; i < sb.buffered.length; i++) {
+      if (sb.buffered.start(i) <= timeSec + 0.05 && timeSec <= sb.buffered.end(i) + 0.05) return true;
+    }
+    return false;
+  };
+  MseEngine.prototype.waitForAudio = async function (timeSec, serial) {
+    for (var i = 0; i < 160; i++) {
+      if (this.dead || serial !== this.switchSerial) return false;
+      if (this.audioCovers(timeSec)) return true;
+      await new Promise(function (resolve) { setTimeout(resolve, 50); });
+    }
+    return false;
+  };
+  MseEngine.prototype.reloadAudioTrack = function (index, at, reason) {
+    if (!currentMedia || this.dead) return;
+    var keepSub = wantedSubtitle;
     var m = {};
     for (var k in currentMedia) m[k] = currentMedia[k];
     m.audioTypeIndex = index;
     m.startTime = at;
-    trace("engine audio → #" + index + " (reload @" + Math.round(at) + "s)");
-    loadMedia(m);                   // tears this engine down, builds a fresh one at `at`
-    wantedSubtitle = keepSub;       // sticky applySubtitles honours it once tracks load
+    trace("engine native audio fallback (" + reason + ")");
+    loadMedia(m);
+    wantedSubtitle = keepSub;
+  };
+  // Switch audio in place. Video stays attached and buffered; only the audio
+  // SourceBuffer is reopened/cleared, retargeted, and refilled just behind the
+  // paused playhead. Calls are serialized and latest-wins, so hammering between
+  // tracks cannot interleave remove/changeType/append operations.
+  MseEngine.prototype.setAudioTrack = function (index) {
+    var track = this.audioTracks[index];
+    if (!track || (!this.audioSwitching && track.id === this.audioTrackId)) return;
+    this.pendingAudioIndex = index;
+    if (!v.paused && !v.ended) this.resumeAfterAudioSwitch = true;
+    this.runAudioSwitch();
+  };
+  MseEngine.prototype.runAudioSwitch = async function () {
+    if (this.dead || this.audioSwitching || this.pendingAudioIndex == null) return;
+    var index = this.pendingAudioIndex;
+    this.pendingAudioIndex = null;
+    var track = this.audioTracks[index];
+    if (!track) return;
+    if (track.id === this.audioTrackId) {
+      if (this.resumeAfterAudioSwitch) { this.resumeAfterAudioSwitch = false; play(); }
+      return;
+    }
+    this.audioSwitching = true;
+    this.audioBufferLocked = true;
+    var serial = ++this.switchSerial;
+    var at = v.currentTime || 0;
+    var oldId = this.audioTrackId;
+    var oldTrack = null;
+    for (var i = 0; i < this.audioTracks.length; i++) {
+      if (this.audioTracks[i].id === oldId) { oldTrack = this.audioTracks[i]; break; }
+    }
+    if (!v.paused) { this.resumeAfterAudioSwitch = true; try { v.pause(); } catch (e) {} }
+    this.cancelPump();
+    try { this.mp4.stop(); } catch (e) {}
+    try { this.mp4.unsetSegmentOptions(oldId); } catch (e) {}
+    this.releaseTrack(oldId);
+    this.releaseTrack(track.id);
+    this.queues.audio = [];
+
+    var sb = this.buffers.audio;
+    var ok = !!sb;
+    // appendBuffer is the standards-defined way to reopen an ended MediaSource.
+    // Use the current init segment (no media frames), then remove its old ranges.
+    if (ok && this.mediaSource.readyState === "ended") {
+      ok = await this.appendDirect(sb, this.initSegs[oldId], serial);
+    }
+    if (ok) ok = await this.removeAudioDirect(sb, serial);
+    var oldMime = oldTrack && this.audioMimeFor(oldTrack);
+    var newMime = this.audioMimeFor(track);
+    if (ok && oldMime !== newMime && !sb.changeType) {
+      this.audioSwitching = false;
+      this.audioBufferLocked = false;
+      this.reloadAudioTrack(index, at, "changeType unavailable");
+      return;
+    }
+    if (ok && sb.changeType) {
+      try { sb.changeType(newMime); }
+      catch (e) { trace("engine audio changeType failed: " + e); ok = false; }
+    }
+    if (ok) ok = await this.appendDirect(sb, this.initSegs[track.id], serial);
+    if (!ok || this.dead || serial !== this.switchSerial) {
+      this.audioSwitching = false;
+      this.audioBufferLocked = false;
+      this.reloadAudioTrack(index, at, "buffer reset failed");
+      return;
+    }
+
+    this.audioTrackId = track.id;
+    this.wantAudioIndex = index;
+    try { this.mp4.setSegmentOptions(track.id, null, { nbSamples: this.audioSegmentSamples }); }
+    catch (e) {
+      this.audioSwitching = false;
+      this.audioBufferLocked = false;
+      this.reloadAudioTrack(index, at, "track setup failed"); return;
+    }
+    var offset = this.seekOffset(Math.max(0, at - 0.75), false);
+    try { this.mp4.start(); } catch (e) {}
+    this.audioBufferLocked = false;
+    this.drain("audio");
+    this.pump(offset);
+    var covered = await this.waitForAudio(at, serial);
+    if (!covered || this.dead || serial !== this.switchSerial) {
+      this.audioSwitching = false;
+      this.reloadAudioTrack(index, at, "refill timeout");
+      return;
+    }
+    trace("engine audio → #" + index + " (native, " + (track.language || "?") + ")");
+    this.audioSwitching = false;
+    if (this.pendingAudioIndex != null && this.pendingAudioIndex !== this.wantAudioIndex) {
+      this.runAudioSwitch();
+      return;
+    }
+    this.pendingAudioIndex = null;
+    if (this.resumeAfterAudioSwitch) { this.resumeAfterAudioSwitch = false; play(); }
   };
   MseEngine.prototype.destroy = function () {
     this.dead = true;
+    this.switchSerial++;
+    this.pendingAudioIndex = null;
+    this.audioBufferLocked = false;
     this.fetchGen++;
     if (this.inflightId != null) { cancelRequest(this.inflightId); this.inflightId = null; }
     try { this.mp4.stop(); } catch (e) {}
@@ -1134,9 +1348,12 @@
   };
 
   var engine = null;
-  // The last `load` command — an audio switch rebuilds the engine from it (at the
-  // live position, with the new audioTypeIndex), so it must be the current media.
+  // The last `load` command is retained only as a recovery path if a browser
+  // cannot mutate its audio SourceBuffer or a native refill times out.
   var currentMedia = null;
+  if (new URL(location.href).searchParams.get("qa") === "1") {
+    window.PLEXCAST_QA = { MseEngine: MseEngine, video: v };
+  }
   function teardownEngine() { if (engine) { try { engine.destroy(); } catch (e) {} engine = null; } }
   // A sender seek sets v.currentTime; when the engine drives playback it must
   // move the demux to match, or the video stalls at an unbuffered position.

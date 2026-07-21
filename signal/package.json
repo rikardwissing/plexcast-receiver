@@ -6,6 +6,7 @@
     "check": "tsc --noEmit",
     "test": "vitest run --max-workers=1 --no-isolate",
     "test:browser": "node scripts/browser-smoke.mjs",
+    "test:mse": "node scripts/mse-audio-switch-smoke.mjs",
     "deploy:staging": "wrangler deploy --env staging",
     "deploy:production": "wrangler deploy --env production",
     "types": "wrangler types"

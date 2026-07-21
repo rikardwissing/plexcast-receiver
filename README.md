@@ -51,6 +51,7 @@ npm install
 npm run check
 npm test
 npm run test:browser
+npm run test:mse
 npx wrangler deploy --dry-run --env staging
 ```
 
@@ -58,6 +59,9 @@ npx wrangler deploy --dry-run --env staging
 runtime. `npm run test:browser` starts the Worker locally and verifies the real
 receiver page in headless Chrome, including pushed offers, answers, presence,
 the absence of the old polling loop, and the outage message.
+`npm run test:mse` uses FFmpeg to generate a temporary two-audio-track MP4,
+streams it through the real MP4Box/MediaSource engine in Chrome, and verifies
+repeated and rapid audio changes without replacing or emptying the video source.
 
 ## Deploy
 
