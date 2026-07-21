@@ -1,52 +1,83 @@
-# Remote WebRTC casting
+# Plex Cast receiver and signaling
 
-Stream a downloaded file straight from the phone to any browser, peer-to-peer,
-with **no public IP and no media relay**. WebRTC/ICE punches through NAT; the
-browser plays via MSE/hls.js, pulling the cast package's HLS segments over the
-data channel. Only tiny SDP text passes through a signalling mailbox — never
-video.
+This repository owns both public pieces of remote browser casting:
 
-## Pieces
+- `index.html` is the receiver deployed at `https://tv.rikard.dev`.
+- `signal/` is the Cloudflare Worker deployed at
+  `https://plexcast-signal.rikard-wissing.workers.dev`.
 
-| Piece | Where it runs | What it does |
-|-------|---------------|--------------|
-| `index.html` | the phone (LAN) **or** GitHub Pages (remote) | the browser receiver (WebRTC answerer + MSE player) |
-| `worker.js` | Cloudflare Workers (remote only) | the offer/answer mailbox, keyed by a short share code |
-| phone app | iOS | creates the offer, serves the segments over the data channel |
+Only signaling data crosses Cloudflare. Video still travels peer-to-peer over
+the WebRTC data channel.
 
-## LAN (zero setup — this is what the app does out of the box)
+## Durable Object signaling
 
-The phone hosts both the page and the mailbox. Pick **Remote (P2P)** in the cast
-menu; the app shows a `http://<phone-ip>:<port>/rtc?room=<code>` URL + QR. Open it
-on any device **on the same network**. Proves the P2P media path with no
-external infrastructure. (Same network, so it overlaps with plain web-cast — this
-mode is mainly the test/proof path.)
+Each normalized room is one SQLite-backed `SignalRoom` Durable Object. Sender
+and viewer use hibernating WebSockets, so an idle paired TV remains reachable
+without browser polling or periodic KV writes. The room stores only the current
+offer, answer, generation, selected viewer, and five-minute expiry.
 
-## True remote (different networks)
+The v1 socket endpoint is:
 
-The browser can't reach the phone, so the **page** lives on GitHub Pages and the
-**handshake** goes through the Cloudflare mailbox:
+```text
+GET /rtc/ws/<room>?role=sender|viewer&session=<stable-session-id>
+```
 
-1. **GitHub Pages** — this `docs/` folder is already Pages-ready. In the repo
-   settings enable Pages from `main` / `docs`. The receiver is then at
-   `https://<you>.github.io/<repo>/rtc/`.
-2. **Cloudflare Worker** — deploy `worker.js` (see the header comment for the KV
-   binding + `wrangler deploy`). Note the origin, e.g.
-   `https://plex-signal.<you>.workers.dev`.
-3. **App settings** — set *Remote page URL* to the Pages URL and *Remote
-   signalling URL* to the Worker origin. The phone then `PUT`s its offer to the
-   Worker, shows `…/rtc/?sig=<worker>&room=<code>`, and polls for the answer.
+Presence and service health are available at:
 
-### STUN only, no TURN (for now)
+```text
+GET /rtc/presence/<pairing-token>
+GET /health
+```
 
-ICE uses Google's public STUN. That connects on most home networks but **fails
-when both ends are behind symmetric NAT** (common on cellular/CGNAT). Adding a
-TURN server later is just one more entry in the `iceServers` list on both ends —
-no other changes. Until then, remote casting is "works on most Wi-Fi, may fail on
-mobile data".
+The old HTTP offer/answer routes remain backed by the same Durable Object, so
+old and new app/page combinations can connect during rollout:
 
-### The real ceiling
+```text
+PUT  /rtc/offer/<room>
+GET  /rtc/offer/<room>
+POST /rtc/answer/<room>
+GET  /rtc/answer/<room>
+```
 
-P2P removes the relay, but the **phone's upload bandwidth** still caps the
-stream — it's uploading the whole thing to the viewer. Cast packages (often
-transcoded/lower-bitrate HLS) help here.
+The root `worker.js` and `wrangler.toml` are the previous KV implementation and
+are retained only as rollback artifacts. New work and deployments use
+`signal/wrangler.jsonc`.
+
+## Develop and verify
+
+```bash
+cd signal
+npm install
+npm run check
+npm test
+npm run test:browser
+npx wrangler deploy --dry-run --env staging
+```
+
+`npm test` runs the Durable Object protocol/compatibility suite in the Workers
+runtime. `npm run test:browser` starts the Worker locally and verifies the real
+receiver page in headless Chrome, including pushed offers, answers, presence,
+the absence of the old polling loop, and the outage message.
+
+## Deploy
+
+Wrangler defines isolated `staging` and `production` environments. Deploy the
+Worker before the page so the new receiver's socket endpoint already exists:
+
+```bash
+cd signal
+npm run deploy:staging
+# verify staging
+npm run deploy:production
+```
+
+After the production health/protocol checks pass, push this repository's page
+changes and wait for GitHub Pages at `tv.rikard.dev`. The Durable Object design
+assumes a Workers Paid account and removes the former KV daily-write quota from
+the signaling hot path.
+
+## Media-network limitation
+
+ICE currently uses public STUN servers without TURN. Signaling can be healthy
+while peer connectivity still fails when both ends are behind restrictive or
+symmetric NAT. Adding TURN later does not require another signaling redesign.

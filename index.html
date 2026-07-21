@@ -76,6 +76,8 @@
     border-radius: 50%; animation: spin 0.9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   #status { color: var(--muted); font-size: 14px; margin-top: 14px; min-height: 18px; }
+  .signal-error { color: #ff8d86; font-size: 13px; line-height: 1.35; margin: 14px 0 0;
+    min-height: 18px; }
 
 
   /* Reconnect overlay over the frozen video. */
@@ -162,6 +164,7 @@
         <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code" aria-label="Cast code">
       </div>
       <button id="go" class="btn" disabled>Watch</button>
+      <div id="signal-error" class="signal-error" role="status" aria-live="polite"></div>
       <div id="scan" class="hidden">
         <p class="scanor">or</p>
         <div id="qr" aria-label="Pairing QR code"></div>
@@ -179,7 +182,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 5;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 6;   // bump when debugging cached-page confusion
   var qs = new URLSearchParams(location.search);
   // sig = signalling mailbox; defaults to the app's built-in Worker so a plain
   // link (page + #code) needs no query. room = the short code from the hash,
@@ -205,11 +208,8 @@
   // A channel opened at least once — turns later failures from "can't traverse
   // NAT" advice into "lost the sender".
   var wasConnected = false;
-  // Offers we answered that nobody consumed (the sender quit with them inside
-  // their TTL) — keyed by room, so the listen loop skips the same corpse.
-  var staleOffers = {};
-  // Set by the landing: puts the page back into paired-listening after an
-  // orphaned answer. Null on code/deep-link sessions.
+  // Set by the landing: puts the page back into paired-listening after a cast
+  // ends. Null on code/deep-link sessions.
   var resumeListening = null;
   // Debounce so the data-channel close and the connection-failed event (both
   // fire on a drop) only tear down once.
@@ -275,11 +275,128 @@
   function hideReconnect() { reconnectEl.classList.remove("show"); }
   function fail(msg) { showPanel(); panel.querySelector(".spinner").style.display = "none"; setStatus("Can’t connect", msg); }
 
+  // ---- Durable signalling ---------------------------------------------------
+  function sigURL(p) { return (sig || "") + p; }
+  function socketURL(p) { return sigURL(p).replace(/^http:/, "ws:").replace(/^https:/, "wss:"); }
+  function signalSession() {
+    try { return crypto.randomUUID().replace(/-/g, ""); }
+    catch (e) { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
+  }
+
+  // A room keeps one hibernation-friendly WebSocket open. Cloudflare pushes
+  // offers as soon as they exist, so paired TVs remain reachable in background
+  // tabs without polling timers or periodic presence writes.
+  function SignalSocket(signalRoom, onOffer, onState) {
+    this.room = signalRoom;
+    this.session = signalSession();
+    this.onOffer = onOffer || function () {};
+    this.onState = onState || function () {};
+    this.socket = null;
+    this.closed = false;
+    this.ready = false;
+    this.retry = 500;
+    this.offers = [];
+    this.offerWaiters = [];
+    this.readyWaiters = [];
+    this.open();
+  }
+  SignalSocket.prototype.open = function () {
+    var self = this;
+    if (self.closed) return;
+    self.onState("Connecting to the signaling service…");
+    var ws = new WebSocket(socketURL("/rtc/ws/" + encodeURIComponent(self.room) +
+                           "?role=viewer&session=" + encodeURIComponent(self.session)));
+    self.socket = ws;
+    ws.onmessage = function (event) {
+      var message;
+      try { message = JSON.parse(event.data); } catch (e) { return; }
+      if (message.type === "ready") {
+        self.ready = true;
+        self.retry = 500;
+        self.onState("");
+        var waiting = self.readyWaiters.splice(0);
+        waiting.forEach(function (pending) { pending.resolve(); });
+      } else if (message.type === "offer" && message.sdp && message.generation) {
+        var offer = { sdp: message.sdp, generation: message.generation };
+        self.offers = [offer];   // only the newest generation can be answered
+        var waiter = self.offerWaiters.shift();
+        if (waiter) waiter.resolve(self.offers.shift());
+        self.onOffer(offer, self);
+      } else if (message.type === "error") {
+        self.onState(message.message || "The signaling service rejected this connection.");
+      }
+    };
+    ws.onclose = function () {
+      if (self.socket !== ws || self.closed) return;
+      self.ready = false;
+      self.onState("Signaling is unavailable. Retrying…");
+      var delay = self.retry;
+      self.retry = Math.min(Math.round(self.retry * 1.7), 8000);
+      setTimeout(function () { self.open(); }, delay);
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+  };
+  SignalSocket.prototype.whenReady = function () {
+    var self = this;
+    if (self.ready && self.socket && self.socket.readyState === WebSocket.OPEN) return Promise.resolve();
+    if (self.closed) return Promise.reject(new Error("signaling closed"));
+    return new Promise(function (resolve, reject) {
+      self.readyWaiters.push({ resolve: resolve, reject: reject });
+    });
+  };
+  SignalSocket.prototype.waitForOffer = function () {
+    var self = this;
+    if (self.offers.length) return Promise.resolve(self.offers.shift());
+    return new Promise(function (resolve, reject) {
+      var pending = { resolve: resolve, reject: reject };
+      self.offerWaiters.push(pending);
+      setTimeout(function () {
+        var i = self.offerWaiters.indexOf(pending);
+        if (i >= 0) {
+          self.offerWaiters.splice(i, 1);
+          reject(new Error("The sender has not published a connection offer yet."));
+        }
+      }, 20000);
+    });
+  };
+  SignalSocket.prototype.answer = async function (generation, sdp) {
+    await this.whenReady();
+    this.socket.send(JSON.stringify({ type: "answer", generation: generation, sdp: sdp }));
+  };
+  SignalSocket.prototype.close = function () {
+    this.closed = true;
+    this.ready = false;
+    try { if (this.socket) this.socket.close(1000, "leaving"); } catch (e) {}
+    this.offerWaiters.splice(0).forEach(function (waiter) { waiter.reject(new Error("signaling closed")); });
+    this.readyWaiters.splice(0).forEach(function (pending) { pending.reject(new Error("signaling closed")); });
+  };
+
+  var activeSignal = null;
+  var landingSignals = {};
+  var signalErrorEl = document.getElementById("signal-error");
+  function activeSignalState(message) {
+    if (message) {
+      if (!entry.classList.contains("hidden")) signalErrorEl.textContent = message;
+      else setStatus("Connecting…", message);
+    } else {
+      signalErrorEl.textContent = "";
+    }
+  }
+  function closeLandingSignals(except) {
+    Object.keys(landingSignals).forEach(function (key) {
+      if (landingSignals[key] !== except) landingSignals[key].close();
+    });
+    landingSignals = {};
+  }
+  window.addEventListener("pagehide", function () {
+    closeLandingSignals();
+    if (activeSignal) activeSignal.close();
+  });
+
   // ---- Pairing: remember senders so they can cast here without a code -------
   // A pairing is {id, name}: the id is a long token the sender minted; it's
-  // also the mailbox room a paired cast arrives on. While this page is open we
-  // (a) beacon presence so the sender's menu shows us online, and (b) listen
-  // on each pairing for an incoming offer.
+  // also the signaling room a paired cast arrives on. While this page is open
+  // one room socket per pairing is both presence and the offer listener.
   var PAIRS_KEY = "plexcast.pairs";
   function loadPairs() {
     try { return JSON.parse(localStorage.getItem(PAIRS_KEY) || "[]"); } catch (e) { return []; }
@@ -292,31 +409,6 @@
     savePairs(list.slice(0, 8));
   }
   function forgetPair(id) { savePairs(loadPairs().filter(function (p) { return p.id !== id; })); }
-
-  // Presence: a tiny beacon under `offer/p-<id>` (reuses the mailbox routes, so
-  // no Worker changes; TTL 5 min, refreshed every 4). The sender lists a paired
-  // device ONLY while its beacon is fresh, so presence must mean "actually
-  // listening": set while the landing listens, cleared the moment the page
-  // answers a cast, types a code, or goes away.
-  var listeningHere = false;
-  function beaconPresence(state) {
-    if (state !== undefined) listeningHere = state;
-    loadPairs().forEach(function (p) {
-      var url = sigURL("/rtc/offer/p-" + encodeURIComponent(p.id));
-      try {
-        fetch(url, { method: "PUT", body: listeningHere ? "1" : "",
-                     headers: { "Content-Type": "text/plain" }, keepalive: true })
-          .catch(function () {});
-      } catch (e) {}
-    });
-  }
-  setInterval(function () { if (listeningHere) beaconPresence(); }, 240000);
-  // Tab closing/navigating away: withdraw presence (sendBeacon survives unload).
-  window.addEventListener("pagehide", function () {
-    loadPairs().forEach(function (p) {
-      try { navigator.sendBeacon(sigURL("/rtc/offer/p-" + encodeURIComponent(p.id)), ""); } catch (e) {}
-    });
-  });
 
   // No code in the link → show the landing form so a code can be typed straight
   // on a TV. Four cells over one hidden input; auto-submits on the 4th digit.
@@ -344,8 +436,9 @@
       var val = (input.value || "").trim();
       if (val.length < 4 || submitted) return;
       submitted = true;
-      beaconPresence(false);   // no longer listening for paired casts
+      closeLandingSignals();
       room = val;
+      activeSignal = new SignalSocket(room, null, activeSignalState);
       showPanel();
       setStatus("Connecting…", "Reaching the sender");
       start(1);   // same self-healing handshake as a deep link
@@ -374,17 +467,16 @@
         var hint = document.createElement("span"); hint.className = "hint"; hint.textContent = "listening…";
         var x = document.createElement("button"); x.className = "forget"; x.textContent = "×";
         x.title = "Forget this device";
-        x.addEventListener("click", function () { forgetPair(p.id); renderPairs(); });
+        x.addEventListener("click", function () { forgetPair(p.id); renderPairs(); listenLanding(); });
         row.appendChild(dot); row.appendChild(name); row.appendChild(hint); row.appendChild(x);
         pairsEl.appendChild(row);
       });
     }
     renderPairs();
-    beaconPresence(true);   // the landing is listening — senders may list us
 
     // Reverse pairing: mint a rendezvous code and show it as a QR. The phone
     // scans it (in-app, or the system camera opens the deep link) and casts to
-    // this screen — no code typed here. We poll this room like a pairing token.
+    // this screen — no code typed here. We listen on this room like a pairing token.
     var scanRoom = "";
     (function setupScanQR() {
       if (typeof qrcode !== "function") return;   // lib offline → code entry still works
@@ -398,89 +490,62 @@
       } catch (e) { scanRoom = ""; }
     })();
 
-    // After an orphaned answer (a corpse offer, nobody reading), come back
-    // here: show the landing again and keep listening for a REAL cast.
+    function acceptLandingOffer(offer, socket, target) {
+      if (submitted) return;
+      trace("signal: offer pushed to landing");
+      submitted = true;
+      activeSignal = socket;
+      closeLandingSignals(socket);
+      room = target.id;
+      showPanel();
+      setStatus("Connecting…", "Answering " + target.name);
+      start(1);
+    }
+
+    function listenLanding() {
+      closeLandingSignals();
+      signalErrorEl.textContent = "";
+      var targets = loadPairs().slice();
+      if (scanRoom) targets.push({ id: scanRoom, name: "your phone" });
+      targets.forEach(function (target) {
+        var socket = new SignalSocket(target.id, function (offer, source) {
+          acceptLandingOffer(offer, source, target);
+        }, activeSignalState);
+        landingSignals[target.id] = socket;
+      });
+    }
+
+    // After a cast ends, come back here and restore the persistent listeners.
     resumeListening = function () {
       submitted = false;
       room = "";
+      if (activeSignal) activeSignal.close();
+      activeSignal = null;
       panel.classList.add("hidden");
       entry.classList.remove("hidden");
       renderPairs();
-      beaconPresence(true);
+      listenLanding();
     };
 
-    // One polling round across all pairings; the first live offer wins.
-    var pollBusy = false;
-    function pollPairsOnce() {
-      window.PLEXCAST_POLLS = (window.PLEXCAST_POLLS || 0) + 1;   // QA observable
-      window.PLEXCAST_POLLSTATE = { submitted: submitted, busy: pollBusy };
-      if (submitted || pollBusy) return;
-      // Poll the paired-sender tokens AND our own scan-QR rendezvous room; the
-      // first live offer wins.
-      var pairs = loadPairs().slice();
-      if (scanRoom) pairs.push({ id: scanRoom, name: "your phone" });
-      if (!pairs.length) return;
-      pollBusy = true;
-      var waiting = pairs.length, done = false;
-      pairs.forEach(function (p) {
-        fetch(sigURL("/rtc/offer/" + encodeURIComponent(p.id)), { cache: "no-store" })
-          .then(function (r) { return r.ok ? r.text() : ""; })
-          .then(function (t) {
-            window.PLEXCAST_POLLT = (t || "").slice(0, 16) + " len=" + (t || "").length;   // QA
-            if (done || submitted) { if (--waiting === 0) pollBusy = false; return; }
-            t = (t || "").trim();
-            if (t && t === staleOffers[p.id]) { trace("poll: skip stale corpse"); t = ""; }
-            if (t) {
-              trace("poll: offer found — answering");
-              done = true; submitted = true; pollBusy = false;
-              beaconPresence(false);   // taken — not listening any more
-              room = p.id;
-              showPanel();
-              setStatus("Connecting…", "Answering " + p.name);
-              start(1);
-            } else if (--waiting === 0) {
-              pollBusy = false;
-            }
-          })
-          .catch(function () { if (--waiting === 0) pollBusy = false; });
-      });
-    }
-    // A background receiver tab is the NORMAL case — and hidden tabs get their
-    // timers throttled to ~1/minute, which would make "listening…" a lie.
-    // Worker timers are exempt, so the tick comes from a tiny inline Worker.
-    try {
-      var tickSrc = URL.createObjectURL(new Blob(["setInterval(function(){postMessage(1)},3000)"],
-                                                 { type: "text/javascript" }));
-      new Worker(tickSrc).onmessage = pollPairsOnce;
-    } catch (e) {
-      setInterval(pollPairsOnce, 3000);   // best effort where workers can't run
-    }
-    pollPairsOnce();
+    listenLanding();
     // NB: no early return — the whole script (data-channel machinery, the
     // playback stall/error listeners) must still be defined for a
     // session that begins here (typed code or paired listen). submitCode /
-    // pollPairsOnce call start() themselves; the deep-link auto-start at the
+    // the listener callback starts itself; the deep-link auto-start at the
     // bottom is guarded on `room`.
   }
 
-  // ---- Signalling (tiny mailbox: GET offer, POST answer) --------------------
-  function sigURL(p) { return (sig || "") + p; }
+  // ---- Signalling offer/answer over the room socket -------------------------
   async function getOffer() {
-    // Poll until the phone has published its offer — tight interval so we grab
-    // it the moment it lands (the phone publishes as soon as ICE has candidates).
-    for (var i = 0; i < 66; i++) {
-      try {
-        var r = await fetch(sigURL("/rtc/offer/" + encodeURIComponent(room)), { cache: "no-store" });
-        if (r.ok) { var t = (await r.text()).trim(); if (t) return t; }
-      } catch (e) {}
-      await new Promise(function (res) { setTimeout(res, 300); });
+    if (!activeSignal || activeSignal.room !== room) {
+      if (activeSignal) activeSignal.close();
+      activeSignal = new SignalSocket(room, null, activeSignalState);
     }
-    throw new Error("no offer");
+    return activeSignal.waitForOffer();
   }
-  async function postAnswer(blob) {
-    await fetch(sigURL("/rtc/answer/" + encodeURIComponent(room)), {
-      method: "POST", body: blob, headers: { "Content-Type": "text/plain" },
-    });
+  async function postAnswer(blob, generation) {
+    if (!activeSignal) throw new Error("Signaling connection closed");
+    await activeSignal.answer(generation, blob);
   }
 
   // ---- Data-channel request/response ----------------------------------------
@@ -1375,7 +1440,8 @@
     };
 
     setStatus("Connecting…", "Fetching connection info");
-    var offerBlob = await getOffer();
+    var signalOffer = await getOffer();
+    var offerBlob = signalOffer.sdp;
     trace("getOffer ok len=" + offerBlob.length);
     await pc.setRemoteDescription(decode(offerBlob));
     var answer = await pc.createAnswer();
@@ -1390,34 +1456,16 @@
       };
     });
     setStatus("Connecting…", "Handing back the answer");
-    await postAnswer(encode(pc.localDescription));
+    await postAnswer(encode(pc.localDescription), signalOffer.generation);
     trace("answer posted for room " + room.slice(0,8));
 
-    // A live sender polls the answer slot every ~1.6s. If our answer is still
-    // sitting there after 6s, nobody's listening — the offer we answered is an
-    // orphan (the sender quit with it inside its TTL). Abandon it and remember
-    // the blob so the listen loop doesn't answer the same corpse again.
-    await new Promise(function (res) { setTimeout(res, 6000); });
+    // Give ICE its normal connection window. The sender acknowledges and clears
+    // the generation over its own socket; if ICE still does not open, its
+    // handshake watchdog publishes a fresh generation and this socket receives
+    // it without polling.
+    await new Promise(function (res) { setTimeout(res, 12000); });
     if (!wasConnected) {
-      var leftover = "";
-      try {
-        var lr = await fetch(sigURL("/rtc/answer/" + encodeURIComponent(room)), { cache: "no-store" });
-        if (lr.ok) leftover = (await lr.text()).trim();
-      } catch (e) {}
-      if (leftover) {
-        trace("orphan: answer never consumed — marking offer stale");
-        try { pc.close(); } catch (x) {}
-        dc = null;
-        staleOffers[room] = offerBlob;
-        throw { orphan: true };
-      }
-    }
-    // The answer was consumed — give ICE the rest of the window, then the
-    // usual self-heal: tear down and rerun the handshake (a mid-rearm race;
-    // the fresh offer will be up by then).
-    await new Promise(function (res) { setTimeout(res, 6000); });
-    if (!wasConnected) {
-      trace("retry: answer consumed but ICE never connected");
+      trace("retry: answer sent but ICE never connected");
       try { pc.close(); } catch (x) {}
       dc = null;
       throw { retry: true };
@@ -1426,15 +1474,7 @@
 
   function start(attempt) {
     connect().catch(function (e) {
-      if (e && e.orphan) {
-        // Nobody was listening for our answer. A paired page goes back to
-        // listening (a real cast publishes a FRESH offer we'll pick up); a
-        // code session tells the user to start over.
-        if (resumeListening) { resumeListening(); }
-        else fail(sender !== "the sender"
-                  ? sender + " isn’t casting right now. Start the cast again in the app."
-                  : "The sender isn’t responding. Start the cast again in the app.");
-      } else if (e && e.retry && attempt < 4) {
+      if (e && e.retry && attempt < 4) {
         setStatus("Connecting…", "Trying again…");
         start(attempt + 1);
       } else {

@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "plexcast-signal",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-21",
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOMS", "class_name": "SignalRoom" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SignalRoom"] }
+  ],
+  "observability": { "enabled": true },
+  "env": {
+    "staging": {
+      "name": "plexcast-signal-staging",
+      "durable_objects": {
+        "bindings": [
+          { "name": "ROOMS", "class_name": "SignalRoom" }
+        ]
+      }
+    },
+    "production": {
+      "name": "plexcast-signal",
+      "durable_objects": {
+        "bindings": [
+          { "name": "ROOMS", "class_name": "SignalRoom" }
+        ]
+      }
+    }
+  }
+}
