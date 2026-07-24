@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Plex Cast</title>
+<link rel="icon" type="image/png" href="icon.png">
+  <title>Plex Cast</title>
 <style>
   :root {
     color-scheme: dark;
@@ -40,6 +41,7 @@
   @keyframes rise { from { opacity: 0; transform: translateY(14px); } }
 
   .mark { width: 66px; height: 66px; margin: 0 auto 18px; display: block;
+    border-radius: 16px;
     filter: drop-shadow(0 10px 24px rgba(245,158,66,0.38)); }
   .wordmark { font-size: 12px; letter-spacing: 3.5px; text-transform: uppercase;
     color: var(--muted); font-weight: 700; margin: 0 0 8px; }
@@ -138,11 +140,7 @@
 
     <!-- Connecting / status -->
     <div id="panel" class="card">
-      <svg class="mark" viewBox="0 0 96 96" aria-hidden="true">
-        <rect x="4" y="4" width="88" height="88" rx="24" fill="#16172B" stroke="url(#bg)" stroke-width="3"/>
-        <path d="M39 27 L71 48 L39 69 Z" fill="url(#bg)"/>
-        <path d="M48 39 V55 M41 48 L48 55 L55 48" fill="none" stroke="#16172B" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
+      <img class="mark" src="icon.png" alt="">
       <div class="spinner"></div>
       <h1>Connecting…</h1>
       <div id="status">Reaching the sender</div>
@@ -150,11 +148,7 @@
 
     <!-- Code-entry landing -->
     <div id="entry" class="card hidden">
-      <svg class="mark" viewBox="0 0 96 96" aria-hidden="true">
-        <rect x="4" y="4" width="88" height="88" rx="24" fill="#16172B" stroke="url(#bg)" stroke-width="3"/>
-        <path d="M39 27 L71 48 L39 69 Z" fill="url(#bg)"/>
-        <path d="M48 39 V55 M41 48 L48 55 L55 48" fill="none" stroke="#16172B" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
+      <img class="mark" src="icon.png" alt="">
       <p class="wordmark">Plex Cast</p>
       <h1>Enter your code</h1>
       <p class="sub">Type the 4-digit code shown in the app.</p>
