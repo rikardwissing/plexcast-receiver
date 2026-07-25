@@ -5,21 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" type="image/png" href="icon.png">
   <title>Plex Downloader</title>
-<script>
-/* Old-engine escape hatch — deliberately 1990s JavaScript, and deliberately in
-   its own script block: blocks compile independently, so this runs even though
-   the receiver below is a syntax error on a 2017 TV (async/await). Those TVs
-   would otherwise sit forever on the static "Connecting… / Reaching the sender"
-   markup, unstyled (the CSS uses custom properties they don't support).
-   tv.html is the ES5 receiver — same proven MSE engine as the LAN page. */
-(function () {
-  try { new Function('return (async function () {})'); return; } catch (e) {}
-  try {
-    var to = 'tv.html' + (location.search || '') + (location.hash || '');
-    if (location.replace) location.replace(to); else location.href = to;
-  } catch (e2) {}
-})();
-</script>
 <style>
   :root {
     color-scheme: dark;
@@ -32,17 +17,18 @@
     --glow: linear-gradient(135deg, var(--accent), var(--coral));
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; color: var(--ink);
+  html, body { margin: 0; height: 100%; color: #ECEAF3; color: var(--ink);
     font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased; }
   /* "Projector in a dark room": warm amber light on deep indigo. */
-  body { background:
-      radial-gradient(1200px 640px at 50% -10%, rgba(245,158,66,0.20), transparent 60%),
+  body { background: radial-gradient(1200px 640px at 50% -10%, rgba(245,158,66,0.20), transparent 60%),
+      radial-gradient(900px 620px at 88% 116%, rgba(158,120,240,0.16), transparent 60%),
+      #16172B; background: radial-gradient(1200px 640px at 50% -10%, rgba(245,158,66,0.20), transparent 60%),
       radial-gradient(900px 620px at 88% 116%, rgba(158,120,240,0.16), transparent 60%),
       var(--deep); }
-  #stage { position: fixed; inset: 0; display: flex; align-items: center;
+  #stage { position: fixed; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center;
     justify-content: center; padding: 24px; }
-  video { position: fixed; inset: 0; width: 100%; height: 100%;
+  video { position: fixed; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%;
     background: #000; object-fit: contain; }
   .hidden { display: none !important; }
 
@@ -59,29 +45,29 @@
     border-radius: 16px;
     filter: drop-shadow(0 10px 24px rgba(245,158,66,0.38)); }
   .wordmark { font-size: 12px; letter-spacing: 3.5px; text-transform: uppercase;
-    color: var(--muted); font-weight: 700; margin: 0 0 8px; }
+    color: #9095AD; color: var(--muted); font-weight: 700; margin: 0 0 8px; }
   h1 { font-size: 25px; font-weight: 700; letter-spacing: -0.3px; margin: 0 0 6px; }
-  .sub { color: var(--muted); font-size: 15px; margin: 0 0 26px; }
+  .sub { color: #9095AD; color: var(--muted); font-size: 15px; margin: 0 0 26px; }
 
   /* OTP-style code entry: four cells over one hidden input. */
   .otp { position: relative; display: flex; gap: 12px; justify-content: center; margin: 4px 0 26px; }
   .cell { width: 60px; height: 76px; border-radius: 18px;
     background: rgba(255,255,255,0.04); border: 1.5px solid rgba(255,255,255,0.13);
     display: flex; align-items: center; justify-content: center;
-    font: 700 42px/1 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink);
+    font: 700 42px/1 ui-monospace, "SF Mono", Menlo, monospace; color: #ECEAF3; color: var(--ink);
     transition: border-color .15s, box-shadow .15s, transform .15s; }
   .cell.filled { border-color: rgba(255,255,255,0.30); }
-  .cell.active { border-color: var(--accent); transform: translateY(-2px);
+  .cell.active { border-color: #F59E42; border-color: var(--accent); transform: translateY(-2px);
     box-shadow: 0 0 0 4px rgba(245,158,66,0.16); }
-  .cell.active::after { content: ""; width: 2px; height: 36px; background: var(--accent);
+  .cell.active::after { content: ""; width: 2px; height: 36px; background: #F59E42; background: var(--accent);
     border-radius: 2px; animation: blink 1.1s step-end infinite; }
   @keyframes blink { 50% { opacity: 0; } }
-  #code { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0;
+  #code { position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; opacity: 0;
     border: 0; background: transparent; cursor: pointer; }
 
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
     width: 100%; height: 54px; border: 0; border-radius: 16px; cursor: pointer;
-    font-size: 17px; font-weight: 700; color: #2A1305; background-image: var(--glow);
+    font-size: 17px; font-weight: 700; color: #2A1305; background-image: linear-gradient(135deg, #F59E42, #E85E52); background-image: var(--glow);
     box-shadow: 0 14px 32px -12px rgba(245,158,66,0.65);
     transition: transform .1s, filter .15s, opacity .15s; }
   .btn:active { transform: translateY(1px); filter: brightness(0.96); }
@@ -89,40 +75,40 @@
     cursor: default; opacity: 0.7; }
 
   .spinner { width: 44px; height: 44px; margin: 2px auto 18px;
-    border: 3.5px solid rgba(245,158,66,0.18); border-top-color: var(--accent);
+    border: 3.5px solid rgba(245,158,66,0.18); border-top-color: #F59E42; border-top-color: var(--accent);
     border-radius: 50%; animation: spin 0.9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  #status { color: var(--muted); font-size: 14px; margin-top: 14px; min-height: 18px; }
+  #status { color: #9095AD; color: var(--muted); font-size: 14px; margin-top: 14px; min-height: 18px; }
   .signal-error { color: #ff8d86; font-size: 13px; line-height: 1.35; margin: 14px 0 0;
     min-height: 18px; }
 
 
   /* Reconnect overlay over the frozen video. */
-  #reconnect { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+  #reconnect { position: fixed; top: 0; left: 0; right: 0; bottom: 0; display: none; align-items: center; justify-content: center;
     background: rgba(11,12,24,0.58); -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px); z-index: 15; }
   #reconnect.show { display: flex; }
   #reconnect .rc-box { text-align: center; }
-  #reconnect .rc-title { margin-top: 14px; font-size: 18px; font-weight: 700; color: var(--ink); }
-  #reconnect .rc-sub { margin-top: 6px; font-size: 14px; color: var(--muted); }
+  #reconnect .rc-title { margin-top: 14px; font-size: 18px; font-weight: 700; color: #ECEAF3; color: var(--ink); }
+  #reconnect .rc-sub { margin-top: 6px; font-size: 14px; color: #9095AD; color: var(--muted); }
 
   /* Paired senders on the landing: we're listening for their casts. */
   #pairs { margin: -8px 0 22px; text-align: left; }
   #pairs .pairhead { font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
-    color: var(--muted); font-weight: 700; margin: 0 0 8px; text-align: center; }
+    color: #9095AD; color: var(--muted); font-weight: 700; margin: 0 0 8px; text-align: center; }
   .pairrow { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
     border-radius: 14px; background: rgba(255,255,255,0.045);
     border: 1px solid rgba(255,255,255,0.08); margin-bottom: 8px; }
-  .pairrow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+  .pairrow .dot { width: 8px; height: 8px; border-radius: 50%; background: #F59E42; background: var(--accent);
     animation: pulse 1.6s ease-in-out infinite; flex: none; }
   @keyframes pulse { 50% { opacity: 0.25; } }
   .pairrow .name { flex: 1; font-size: 15px; font-weight: 600; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pairrow .hint { color: var(--muted); font-size: 12px; flex: none; }
-  .pairrow .forget { flex: none; border: 0; background: transparent; color: var(--muted);
+  .pairrow .hint { color: #9095AD; color: var(--muted); font-size: 12px; flex: none; }
+  .pairrow .forget { flex: none; border: 0; background: transparent; color: #9095AD; color: var(--muted);
     font-size: 17px; cursor: pointer; padding: 2px 6px; border-radius: 8px; }
-  .pairrow .forget:hover { color: var(--ink); background: rgba(255,255,255,0.08); }
+  .pairrow .forget:hover { color: #ECEAF3; color: var(--ink); background: rgba(255,255,255,0.08); }
   #scan { margin-top: 22px; }
-  .scanor { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 2px;
+  .scanor { color: #9095AD; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 2px;
     margin: 0 0 16px; position: relative; }
   .scanor::before, .scanor::after { content: ""; position: absolute; top: 50%; width: 32%;
     height: 1px; background: rgba(255,255,255,0.12); }
@@ -187,12 +173,28 @@
 <!-- mp4box.js: demuxes a multi-audio direct MP4 so the MSE engine can switch
      audio without reloading video (the same lib the Chromecast receiver uses,
      vendored locally so the receiver has no runtime CDN dependency for it). -->
+<!-- Runtime polyfills for 2017-era TV engines, shared with the LAN receiver.
+     MUST load before mp4box: they are installed non-enumerably, because a
+     plain assignment leaks into for-in loops and mp4box walks arrays that way
+     (it read our Array.prototype helpers as sample groups and crashed). -->
+<script src="tv-polyfills.js"></script>
 <script src="mp4box.all.min.js"></script>
+<!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
+     segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
+<script src="tv-mse.js"></script>
 <script>
 (function () {
   "use strict";
   window.PLEXCAST_VERSION = 8;   // bump when debugging cached-page confusion
-  var qs = new URLSearchParams(location.search);
+  /* ES5 query parsing on purpose: URLSearchParams is Chrome 49+ and this is
+     the first executable line on a 2017 TV — a TypeError here would blank the
+     whole receiver. */
+  function param(name) {
+    var source = String(location.search || '') + '&' + String(location.hash || '').replace(/^#/, '');
+    var found = new RegExp('(?:[?&#]|^)' + name + '=([^&#]*)').exec(source);
+    return found ? decodeURIComponent(found[1].replace(/\+/g, ' ')) : '';
+  }
+  var qs = { get: function (name) { return param(name) || null; } };
   // sig = signalling mailbox; defaults to the app's built-in Worker so a plain
   // link (page + #code) needs no query. room = the short code from the hash,
   // ?room, or typed into the landing form.
@@ -236,30 +238,46 @@
   // Set when the sender deliberately ends the cast ({t:"stop"}) — then a channel
   // close is expected and we should NOT try to reconnect.
   var stopped = false;
-  async function handleDrop() {
+  function nowMs() {
+    try { if (window.performance && performance.now) return performance.now(); } catch (e) {}
+    return new Date().getTime();
+  }
+  function handleDrop() {
     if (reconnecting) return;               // one loop owns retries; later drops feed back in
     if (stopped || !room) { giveUp(); return; }
     reconnecting = true;
     var myGen = ++reconnectGen;
     try { v.pause(); } catch (e) {}         // freeze the last frame — do NOT tear the video down
     showReconnect("Lost the connection to " + sender);
-    var deadline = performance.now() + RECONNECT_WINDOW_MS;
+    var deadline = nowMs() + RECONNECT_WINDOW_MS;
     var delay = 800;
-    while (reconnecting && reconnectGen === myGen && !stopped && performance.now() < deadline) {
+    /* ES5 retry loop (no async/await — this must parse on a 2017 TV): each
+       attempt re-handshakes, and a superseded generation bails out. */
+    function finish() {
+      if (reconnectGen !== myGen) return;
+      reconnecting = false;
+      hideReconnect();
+      if (!wasConnected) giveUp();          // window expired — the sender is really gone
+    }
+    function attempt() {
+      if (!(reconnecting && reconnectGen === myGen && !stopped && nowMs() < deadline)) { finish(); return; }
       try { if (window.PAGEPC) window.PAGEPC.close(); } catch (e) {}
       rejectAllPending(new Error("connection closed"));
       dc = null;
       wasConnected = false;
-      try { await connect(); } catch (e) {}
-      if (reconnectGen !== myGen) return;   // a newer drop took over while we awaited
-      if (wasConnected) break;              // reconnected — dc.onopen cleared the overlay
-      await new Promise(function (r) { setTimeout(r, delay); });
-      delay = Math.min(Math.round(delay * 1.5), 5000);   // back off, capped at 5s
+      function afterAttempt() {
+        if (reconnectGen !== myGen) return; // a newer drop took over
+        if (wasConnected) { finish(); return; }   // reconnected — dc.onopen cleared the overlay
+        setTimeout(function () {
+          if (reconnectGen !== myGen) return;
+          delay = Math.min(Math.round(delay * 1.5), 5000);   // back off, capped at 5s
+          attempt();
+        }, delay);
+      }
+      try { connect().then(afterAttempt, afterAttempt); }
+      catch (e) { afterAttempt(); }
     }
-    if (reconnectGen !== myGen) return;
-    reconnecting = false;
-    hideReconnect();
-    if (!wasConnected) giveUp();            // window expired — the sender is really gone
+    attempt();
   }
   // Sender stopped on purpose, or reconnection is exhausted — become a castable
   // device again: a paired page goes back to listening, a code/deep-link page
@@ -368,9 +386,11 @@
       }, 20000);
     });
   };
-  SignalSocket.prototype.answer = async function (generation, sdp) {
-    await this.whenReady();
-    this.socket.send(JSON.stringify({ type: "answer", generation: generation, sdp: sdp }));
+  SignalSocket.prototype.answer = function (generation, sdp) {
+    var self = this;
+    return self.whenReady().then(function () {
+      self.socket.send(JSON.stringify({ type: "answer", generation: generation, sdp: sdp }));
+    });
   };
   SignalSocket.prototype.close = function () {
     this.closed = true;
@@ -545,16 +565,16 @@
   }
 
   // ---- Signalling offer/answer over the room socket -------------------------
-  async function getOffer() {
+  function getOffer() {
     if (!activeSignal || activeSignal.room !== room) {
       if (activeSignal) activeSignal.close();
       activeSignal = new SignalSocket(room, null, activeSignalState);
     }
     return activeSignal.waitForOffer();
   }
-  async function postAnswer(blob, generation) {
-    if (!activeSignal) throw new Error("Signaling connection closed");
-    await activeSignal.answer(generation, blob);
+  function postAnswer(blob, generation) {
+    if (!activeSignal) return Promise.reject(new Error("Signaling connection closed"));
+    return activeSignal.answer(generation, blob);
   }
 
   // ---- Data-channel request/response ----------------------------------------
@@ -567,8 +587,8 @@
   // This is an INACTIVITY deadline, not a whole-request deadline. Every header
   // and body chunk rearms it, so a slow link may take as long as it needs while
   // a wedged SCTP request cannot strand the MSE pump forever. QA may shorten it.
-  var requestIdleOverride = new URL(location.href).searchParams.get("requestIdleMs");
-  var REQUEST_IDLE_MS = requestIdleOverride && new URL(location.href).searchParams.get("qa") === "1"
+  var requestIdleOverride = param("requestIdleMs");
+  var REQUEST_IDLE_MS = requestIdleOverride && param("qa") === "1"
     ? Math.max(25, Number(requestIdleOverride) || 15000) : 15000;
 
   function channelReady() { return dc && dc.readyState === "open"; }
@@ -783,6 +803,24 @@
   // The stats shape must match hls.js's LoadStats exactly — it reads/writes
   // loading, parsing AND buffering timings; a missing `buffering` throws
   // "Cannot read properties of undefined (reading 'start')" on every append.
+  /* TextDecoder landed in Chromium 38 itself, so decode by hand where it is
+     missing. Manifests and WebVTT are the only text that comes through here. */
+  function decodeText(bytes) {
+    try { return new TextDecoder("utf-8").decode(bytes); } catch (e) {}
+    var out = "", i = 0, c;
+    while (i < bytes.length) {
+      c = bytes[i++];
+      if (c < 0x80) out += String.fromCharCode(c);
+      else if (c < 0xE0) out += String.fromCharCode(((c & 0x1F) << 6) | (bytes[i++] & 0x3F));
+      else if (c < 0xF0) out += String.fromCharCode(((c & 0x0F) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F));
+      else {                                    // outside the BMP: surrogate pair
+        var cp = ((c & 0x07) << 18) | ((bytes[i++] & 0x3F) << 12) | ((bytes[i++] & 0x3F) << 6) | (bytes[i++] & 0x3F);
+        cp -= 0x10000;
+        out += String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF));
+      }
+    }
+    return out;
+  }
   function DataChannelLoader() { this.stats = { aborted: false, loaded: 0, total: 0,
     retry: 0, chunkCount: 0, bwEstimate: 0, loading: { start: 0, first: 0, end: 0 },
     parsing: { start: 0, end: 0 }, buffering: { start: 0, first: 0, end: 0 } }; }
@@ -808,7 +846,7 @@
       self.stats.loading.first = now; self.stats.loading.end = now;
       self.stats.loaded = self.stats.total = r.data.length;
       var isText = context.responseType === "text" || /\.m3u8(\?|$)/i.test(path);
-      var data = isText ? new TextDecoder("utf-8").decode(r.data) : r.data.buffer;
+      var data = isText ? decodeText(r.data) : r.data.buffer;
       var response = { url: context.url, data: data };
       callbacks.onSuccess(response, self.stats, context, null);
     }).catch(function (e) {
@@ -909,511 +947,42 @@
       v.poster = URL.createObjectURL(new Blob([r.data], { type: (r.meta && r.meta.ctype) || "image/jpeg" }));
     }).catch(function () {});
   }
-  // ---- MSE engine: audio switching for a multi-audio direct MP4 --------------
-  // A muxed MP4 on native <video> exposes only its default audio. For a file the
-  // sender flags {mse:true} we demux it with mp4box.js — pulling 2 MB byte
-  // windows over THIS data channel instead of HTTP — and feed two SourceBuffers.
-  // We generate an init segment for every audio track but fragment only the
-  // active one. A switch pauses at the live position, replaces just the audio
-  // SourceBuffer contents, and refills that track — the video URL and buffered
-  // video never change. This is the Chromecast receiver's engine
-  // (receiver/receiver.js) adapted from `fetch(Range)` to fetchOverChannel.
-  function MseEngine(path, audioTypeIndex, fetcher) {
-    this.path = path;
-    this.fetcher = fetcher || fetchOverChannel;
-    this.wantAudioIndex = audioTypeIndex || 0;
-    this.mediaSource = new MediaSource();
-    this.objectUrl = URL.createObjectURL(this.mediaSource);
-    this.mp4 = MP4Box.createFile();
-    this.buffers = {};        // 'video' | 'audio' → SourceBuffer
-    this.queues = { video: [], audio: [] };
-    this.initSegs = {};       // mp4 track id → init segment ArrayBuffer
-    this.audioTracks = [];    // mp4box audio track infos, file order
-    this.videoTrackId = null;
-    this.audioTrackId = null;
-    this.fetchOffset = 0;
-    this.fetchGen = 0;        // bumped to cancel an in-flight pump
-    this.inflightId = null;   // the data-channel request id currently fetching
-    this.sourceOpened = false;
-    this.audioSwitching = false;
-    this.audioBufferLocked = false;
-    this.pendingAudioIndex = null;
-    this.resumeAfterAudioSwitch = false;
-    this.switchSerial = 0;
-    this.audioSegmentSamples = 48;
-    this.dead = false;
-    var self = this;
-    // Appending after endOfStream() transitions MSE back to "open" and fires
-    // sourceopen again. Initialising MP4Box a second time starts a competing pump
-    // at byte zero, which was one of the old switch-stall failure modes.
-    this.mediaSource.addEventListener("sourceopen", function () {
-      if (self.sourceOpened) return;
-      self.sourceOpened = true;
-      self.onSourceOpen();
-    });
+  // ---- MSE engine ------------------------------------------------------------
+  // The engine itself lives in tv-mse.js, shared verbatim with the LAN receiver
+  // — the build that plays on a 2017 webOS TV. Getting there needed three things
+  // this page's old inline engine did not do: hand-built minimal init segments,
+  // media fragments cut at keyframes, and per-SourceBuffer mfhd sequences. Rather
+  // than keep two engines in step, this page supplies the only piece that
+  // differs: a byte source that reads through the data channel instead of HTTP.
+  //
+  // tv-mse.js reaches back for three page-level helpers (dereferenced at call
+  // time) and reports through window.tvReport.
+  window.tvHelpers = { canPlay: canPlay, codecName: codecName, playbackError: playbackError };
+  window.tvReport = trace;
+
+  // fetchOverChannel is promise-based and takes an options bag; the engine wants
+  // fetch(path, start, endInclusive, cb) -> {abort}. A cancelled window must NOT
+  // surface as an error (the engine aborts its in-flight window on every seek).
+  function channelFetcher(path, start, end, cb) {
+    var id = null, cancelled = false;
+    fetchOverChannel(path, { start: start, end: end, onId: function (n) { id = n; } })
+      .then(function (r) {
+        if (cancelled) return;
+        var meta = r.meta || {};
+        cb(null, { buffer: r.data.buffer, total: (meta.total != null ? meta.total : null),
+                   status: meta.status || 206 });
+      })
+      .catch(function (e) { if (!cancelled) cb(e, null); });
+    return { abort: function () { cancelled = true; if (id != null) cancelRequest(id); } };
   }
-  MseEngine.prototype.onSourceOpen = function () {
-    var self = this;
-    this.mp4.onError = function (e) { trace("engine mp4box error: " + e); };
-    this.mp4.onReady = function (info) { self.onReady(info); };
-    this.mp4.onSegment = function (id, user, buffer, sampleNum) { self.onSegment(id, buffer, sampleNum); };
-    this.pump(0);
-  };
-  MseEngine.prototype.onReady = function (info) {
-    var video = info.videoTracks && info.videoTracks[0];
-    this.audioTracks = info.audioTracks || [];
-    var audio = this.audioTracks[this.wantAudioIndex] || this.audioTracks[0];
-    if (!video || !audio) { playbackError("This video is missing a track the player needs."); return; }
-    // Same pre-flight codec gate as the HLS path — an unsupported codec (E-AC-3
-    // is the classic) otherwise buffers forever behind a silent SourceBuffer.
-    if (!canPlay("video", video.codec)) {
-      playbackError("This browser can’t decode the video: " + codecName(video.codec) + "."); return;
-    }
-    if (!canPlay("audio", audio.codec)) {
-      playbackError("This browser can’t decode the audio: " + codecName(audio.codec) +
-                    ". Convert the file (compatible audio) and cast again."); return;
-    }
-    this.videoTrackId = video.id;
-    this.audioTrackId = audio.id;
-    if (info.duration && info.timescale) {
-      try { this.mediaSource.duration = info.duration / info.timescale; } catch (e) {}
-    }
-    var vMime = 'video/mp4; codecs="' + video.codec + '"';
-    this.audioMimeFor = function (t) { return 'audio/mp4; codecs="' + t.codec + '"'; };
-    var self = this;
-    try {
-      this.buffers.video = this.mediaSource.addSourceBuffer(vMime);
-      this.buffers.audio = this.mediaSource.addSourceBuffer(this.audioMimeFor(audio));
-    } catch (e) {
-      playbackError("This browser can’t decode this format."); return;
-    }
-    ["video", "audio"].forEach(function (kind) {
-      self.buffers[kind].addEventListener("updateend", function () { self.drain(kind); });
-    });
-    // Ask for every audio track just long enough to generate its init segment,
-    // then segment only the active one. The old engine kept all audio tracks
-    // active and discarded their output; repeated seeks therefore advanced and
-    // reset several independent sample cursors and could strand the chosen track
-    // at a stale byte frontier.
-    this.mp4.setSegmentOptions(video.id, null, { nbSamples: 100 });
-    for (var i = 0; i < this.audioTracks.length; i++) {
-      this.mp4.setSegmentOptions(this.audioTracks[i].id, null, { nbSamples: this.audioSegmentSamples });
-    }
-    var segs = this.mp4.initializeSegmentation();
-    for (var j = 0; j < segs.length; j++) this.initSegs[segs[j].id] = segs[j].buffer;
-    for (var k = 0; k < this.audioTracks.length; k++) {
-      if (this.audioTracks[k].id !== audio.id) this.mp4.unsetSegmentOptions(this.audioTracks[k].id);
-    }
-    this.enqueue("video", this.initSegs[video.id]);
-    this.enqueue("audio", this.initSegs[audio.id]);
-    this.mp4.start();
-    trace("engine ready: video " + video.codec + ", " + this.audioTracks.length +
-          " audio, playing #" + this.wantAudioIndex);
-    // A moov-at-end file streamed past before the index was known — either way,
-    // sample extraction starts by seeking the demux back to the first frame.
-    this.reposition(0);
-  };
-  MseEngine.prototype.onSegment = function (id, buffer, sampleNum) {
-    if (id === this.videoTrackId) {
-      // A reposition (audio switch / backward seek) re-extracts video from behind
-      // the parse head, but that region is already in the video SourceBuffer.
-      // Re-appending it is wasted work and a needless parse/decoder churn (a
-      // source of intermittent CHUNK_DEMUXER_ERROR); drop segments the video
-      // buffer already covers, keep only new frontier video.
-      if (this.videoBuffered(sampleNum)) return;
-      this.enqueue("video", buffer);
-    } else if (id === this.audioTrackId) {
-      this.enqueue("audio", buffer);
-    }
-    // other audio tracks: demuxed and dropped
-  };
-  // Is the video for this just-emitted segment (its last sample's time) already
-  // in the video SourceBuffer? Segments are contiguous, so the last sample being
-  // covered means the whole segment is.
-  MseEngine.prototype.videoBuffered = function (sampleNum) {
-    var sb = this.buffers.video;
-    if (!sb || !sb.buffered.length || !sampleNum) return false;
-    var trak = this.mp4.getTrackById(this.videoTrackId);
-    var s = trak && trak.samples && trak.samples[sampleNum - 1];
-    if (!s || !s.timescale) return false;
-    var t = s.cts / s.timescale;
-    for (var i = 0; i < sb.buffered.length; i++) {
-      if (sb.buffered.start(i) - 0.05 <= t && t <= sb.buffered.end(i) + 0.05) return true;
-    }
-    return false;
-  };
-  MseEngine.prototype.enqueue = function (kind, buffer) {
-    if (!buffer) return;
-    this.queues[kind].push(buffer);
-    this.drain(kind);
-  };
-  MseEngine.prototype.drain = function (kind) {
-    var sb = this.buffers[kind];
-    // Append when the MediaSource is "open" OR "ended" — appendBuffer itself
-    // transitions "ended" → "open", so a switch/seek after the stream reached
-    // EOF can refill. Bailing on "ended" here would deadlock (nothing ever
-    // re-opens it), stalling playback forever on a switch at/after full buffering.
-    if (this.dead || !sb || sb.updating || this.mediaSource.readyState === "closed") return;
-    // The switch state machine mutates the audio SourceBuffer directly. Keep
-    // normal append-queue traffic out until remove/changeType/init has finished.
-    if (kind === "audio" && this.audioBufferLocked) return;
-    var next = this.queues[kind].shift();
-    if (!next) return;
-    try { sb.appendBuffer(next); }
-    catch (e) {
-      if (e.name === "QuotaExceededError") { this.queues[kind].unshift(next); this.evict(kind); }
-      else trace("engine append " + kind + " failed: " + e);
-    }
-  };
-  MseEngine.prototype.evict = function (kind) {
-    var sb = this.buffers[kind];
-    var now = v.currentTime || 0;
-    var keepFrom = Math.max(0, now - 20);
-    try {
-      if (!sb.updating && sb.buffered.length && sb.buffered.start(0) < keepFrom - 1) sb.remove(0, keepFrom);
-    } catch (e) {}
-  };
-  // How far ahead BOTH tracks are buffered — the MIN, not just video. After an
-  // audio switch flushes the audio buffer, video is still buffered far ahead; if
-  // the pump throttled on video alone it would refuse to fetch and the flushed
-  // audio would never refill (a stall). Taking the min keeps the pump fetching
-  // until audio has caught up too.
-  MseEngine.prototype.aheadOf = function (kind) {
-    var sb = this.buffers[kind];
-    if (!sb || !sb.buffered.length) return 0;
-    var now = v.currentTime || 0;
-    // Only the contiguous range containing the playhead is useful "ahead".
-    // After old media is evicted, a backward seek can sit before every buffered
-    // range; measuring to the final (stale future) range then makes the pump
-    // think it has >90s available and it never fetches the missing target.
-    for (var i = 0; i < sb.buffered.length; i++) {
-      if (sb.buffered.start(i) <= now && now <= sb.buffered.end(i)) {
-        return Math.max(0, sb.buffered.end(i) - now);
-      }
-    }
-    return 0;
-  };
-  MseEngine.prototype.bufferedAheadSec = function () {
-    return Math.min(this.aheadOf("video"), this.aheadOf("audio"));
-  };
-  // Sequential byte pump: fetch 2 MB windows over the channel, hand them to
-  // mp4box (which returns the next offset it wants), stall while >90s is
-  // buffered ahead, trim behind playback as we go.
-  MseEngine.prototype.pump = async function (offset) {
-    var gen = ++this.fetchGen;
-    var CHUNK = 2 * 1024 * 1024;
-    var failures = 0;
-    this.fetchOffset = offset;
-    while (!this.dead && gen === this.fetchGen) {
-      if (this.bufferedAheadSec() > 90) {
-        await new Promise(function (r) { setTimeout(r, 500); });
-        this.evict("video"); this.evict("audio");
-        continue;
-      }
-      var buf;
-      try {
-        var self = this;
-        var r = await this.fetcher(this.path, {
-          start: this.fetchOffset, end: this.fetchOffset + CHUNK - 1,
-          onId: function (id) { self.inflightId = id; },
-        });
-        this.inflightId = null;
-        buf = r.data.buffer;
-      } catch (e) {
-        if (this.dead || gen !== this.fetchGen) return;
-        this.inflightId = null;
-        failures++;
-        var delay = Math.min(250 * Math.pow(2, Math.min(failures - 1, 4)), 4000);
-        trace("engine fetch failed @" + this.fetchOffset + ": " + e +
-              " — retrying in " + delay + "ms");
-        await new Promise(function (resolve) { setTimeout(resolve, delay); });
-        continue;
-      }
-      if (this.dead || gen !== this.fetchGen) return;
-      failures = 0;
-      // appendBuffer already emits a final partial segment when it reaches the
-      // track's last sample. MP4Box.flush() forces processSamples(true), which
-      // emits one fragment PER remaining sample after a reposition and can flood
-      // the queue with thousands of appends during an audio switch.
-      if (!buf.byteLength) { this.endStreamWhenDrained(gen); return; }  // EOF
-      buf.fileStart = this.fetchOffset;
-      var next = this.mp4.appendBuffer(buf);
-      // appendBuffer can fire onReady, whose reposition() supersedes THIS pump.
-      if (this.dead || gen !== this.fetchGen) return;
-      if (buf.byteLength < CHUNK) { this.endStreamWhenDrained(gen); return; }  // short read = EOF
-      this.fetchOffset = (typeof next === "number") ? next : this.fetchOffset + buf.byteLength;
-    }
-  };
-  MseEngine.prototype.endStreamWhenDrained = function (gen) {
-    var self = this;
-    var tryEnd = function () {
-      if (self.dead || gen !== self.fetchGen || self.mediaSource.readyState !== "open") return;
-      if (self.queues.video.length || self.queues.audio.length ||
-          self.buffers.video.updating || self.buffers.audio.updating) { setTimeout(tryEnd, 200); return; }
-      try { self.mediaSource.endOfStream(); } catch (e) {}
-    };
-    tryEnd();
-  };
-  // Free one track's already-extracted sample data and reset its read cursor.
-  // This is what makes a BACKWARD seek possible: MP4Box skips samples still
-  // marked "fully read", so without this a seek to a time behind the parse head
-  // (an audio switch's refill, or a user scrubbing back) returns the forward
-  // parse cursor instead of the target's real byte offset — the switched track
-  // would then only fill in from far ahead, leaving a silence gap. Releasing
-  // also bounds memory over a long stream. (The Chromecast engine omits this;
-  // over the data channel, with re-fetch on reposition, it's both safe and
-  // necessary.)
-  MseEngine.prototype.releaseTrack = function (id) {
-      var trak = id != null && this.mp4.getTrackById(id);
-      if (!trak || !trak.samples) return;
-      // Release up to the HIGHEST sample read at all — not just the contiguous
-      // prefix — and reset lastValidSample so samples a PRIOR refill re-read get
-      // released again. mp4box.releaseUsedSamples only moves its lastValidSample
-      // cursor forward, so without the reset those re-read samples stay marked
-      // "fully read"; the next seek skips them and returns the forward parse
-      // cursor instead of the target's byte offset → the switched audio refills
-      // far ahead of the playhead and playback stalls (bit the 2nd+ switch).
-      var upto = 0;
-      for (var i = 0; i < trak.samples.length; i++) {
-        if (trak.samples[i].alreadyRead > 0) upto = i + 1;
-      }
-      if (upto > 0) { trak.lastValidSample = 0; try { this.mp4.releaseUsedSamples(id, upto); } catch (e) {} }
-  };
-  MseEngine.prototype.releaseConsumed = function () {
-    this.releaseTrack(this.videoTrackId);
-    this.releaseTrack(this.audioTrackId);
-  };
-  // MP4Box.seek() moves EVERY track in the file, including inactive audio and
-  // subtitle tracks. Seek only the tracks this MSE presentation actually feeds.
-  // For an audio-only refill, leave video's nextSample at its buffered frontier.
-  MseEngine.prototype.seekOffset = function (timeSec, includeVideo) {
-    var ids = includeVideo ? [this.videoTrackId, this.audioTrackId] : [this.audioTrackId];
-    var offset = Infinity;
-    for (var i = 0; i < ids.length; i++) {
-      var trak = ids[i] != null && this.mp4.getTrackById(ids[i]);
-      if (!trak) continue;
-      try {
-        var seek = this.mp4.seekTrack(Math.max(0, timeSec), ids[i] === this.videoTrackId, trak);
-        if (seek && seek.offset < offset) offset = seek.offset;
-      } catch (e) { trace("engine track seek failed: " + e); }
-    }
-    if (offset === Infinity) return this.mp4.nextParsePosition || 0;
-    try { return this.mp4.stream.getEndFilePositionAfter(offset); }
-    catch (e) { return offset; }
-  };
-  MseEngine.prototype.cancelPump = function () {
-    this.fetchGen++;
-    if (this.inflightId != null) { cancelRequest(this.inflightId); this.inflightId = null; }
-  };
-  // Reposition the demux (post-index start, sender seek, or audio-switch refill).
-  // Release consumed samples first so mp4box maps the time to the real previous-
-  // keyframe byte offset (see releaseConsumed); cancel the in-flight window so
-  // the sender stops streaming bytes we're leaving; then re-pump from there —
-  // re-extracted video just overwrites itself in MSE.
-  MseEngine.prototype.reposition = function (timeSec) {
-    if (this.audioSwitching) return;
-    this.cancelPump();
-    this.releaseConsumed();
-    this.pump(this.seekOffset(timeSec, true));
-  };
-  MseEngine.prototype.waitForIdle = function (sb) {
-    var self = this;
-    return new Promise(function (resolve) {
-      if (self.dead || !sb || !sb.updating) { resolve(!self.dead); return; }
-      var timer;
-      var done = function () {
-        clearTimeout(timer);
-        sb.removeEventListener("updateend", done);
-        sb.removeEventListener("error", done);
-        resolve(!self.dead);
-      };
-      sb.addEventListener("updateend", done);
-      sb.addEventListener("error", done);
-      timer = setTimeout(done, 3000);
-    });
-  };
-  MseEngine.prototype.appendDirect = async function (sb, buffer, serial) {
-    if (!buffer || !(await this.waitForIdle(sb)) || this.dead || serial !== this.switchSerial) return false;
-    var self = this;
-    return new Promise(function (resolve) {
-      var timer;
-      var finish = function (ok) {
-        clearTimeout(timer);
-        sb.removeEventListener("updateend", onEnd);
-        sb.removeEventListener("error", onError);
-        resolve(ok && !self.dead && serial === self.switchSerial);
-      };
-      var onEnd = function () { finish(true); };
-      var onError = function () { finish(false); };
-      sb.addEventListener("updateend", onEnd);
-      sb.addEventListener("error", onError);
-      timer = setTimeout(function () { finish(!sb.updating); }, 3000);
-      try { sb.appendBuffer(buffer); }
-      catch (e) { trace("engine direct append failed: " + e); finish(false); }
-    });
-  };
-  MseEngine.prototype.removeAudioDirect = async function (sb, serial) {
-    if (!(await this.waitForIdle(sb)) || this.dead || serial !== this.switchSerial) return false;
-    if (!sb.buffered.length) return true;
-    var end = sb.buffered.end(sb.buffered.length - 1) + 1;
-    if (isFinite(this.mediaSource.duration)) end = Math.max(end, this.mediaSource.duration);
-    var self = this;
-    return new Promise(function (resolve) {
-      var timer;
-      var finish = function (ok) {
-        clearTimeout(timer);
-        sb.removeEventListener("updateend", onEnd);
-        sb.removeEventListener("error", onError);
-        resolve(ok && !self.dead && serial === self.switchSerial);
-      };
-      var onEnd = function () { finish(true); };
-      var onError = function () { finish(false); };
-      sb.addEventListener("updateend", onEnd);
-      sb.addEventListener("error", onError);
-      timer = setTimeout(function () { finish(!sb.updating); }, 3000);
-      try { sb.remove(0, end); }
-      catch (e) { trace("engine audio remove failed: " + e); finish(false); }
-    });
-  };
-  MseEngine.prototype.audioCovers = function (timeSec) {
-    var sb = this.buffers.audio;
-    if (!sb) return false;
-    for (var i = 0; i < sb.buffered.length; i++) {
-      if (sb.buffered.start(i) <= timeSec + 0.05 && timeSec <= sb.buffered.end(i) + 0.05) return true;
-    }
-    return false;
-  };
-  MseEngine.prototype.waitForAudio = async function (timeSec, serial) {
-    for (var i = 0; i < 160; i++) {
-      if (this.dead || serial !== this.switchSerial) return false;
-      if (this.audioCovers(timeSec)) return true;
-      await new Promise(function (resolve) { setTimeout(resolve, 50); });
-    }
-    return false;
-  };
-  MseEngine.prototype.reloadAudioTrack = function (index, at, reason) {
-    if (!currentMedia || this.dead) return;
-    var keepSub = wantedSubtitle;
-    var m = {};
-    for (var k in currentMedia) m[k] = currentMedia[k];
-    m.audioTypeIndex = index;
-    m.startTime = at;
-    trace("engine native audio fallback (" + reason + ")");
-    loadMedia(m);
-    wantedSubtitle = keepSub;
-  };
-  // Switch audio in place. Video stays attached and buffered; only the audio
-  // SourceBuffer is reopened/cleared, retargeted, and refilled just behind the
-  // paused playhead. Calls are serialized and latest-wins, so hammering between
-  // tracks cannot interleave remove/changeType/append operations.
-  MseEngine.prototype.setAudioTrack = function (index) {
-    var track = this.audioTracks[index];
-    if (!track || (!this.audioSwitching && track.id === this.audioTrackId)) return;
-    this.pendingAudioIndex = index;
-    if (!v.paused && !v.ended) this.resumeAfterAudioSwitch = true;
-    this.runAudioSwitch();
-  };
-  MseEngine.prototype.runAudioSwitch = async function () {
-    if (this.dead || this.audioSwitching || this.pendingAudioIndex == null) return;
-    var index = this.pendingAudioIndex;
-    this.pendingAudioIndex = null;
-    var track = this.audioTracks[index];
-    if (!track) return;
-    if (track.id === this.audioTrackId) {
-      if (this.resumeAfterAudioSwitch) { this.resumeAfterAudioSwitch = false; play(); }
-      return;
-    }
-    this.audioSwitching = true;
-    this.audioBufferLocked = true;
-    var serial = ++this.switchSerial;
-    var at = v.currentTime || 0;
-    var oldId = this.audioTrackId;
-    var oldTrack = null;
-    for (var i = 0; i < this.audioTracks.length; i++) {
-      if (this.audioTracks[i].id === oldId) { oldTrack = this.audioTracks[i]; break; }
-    }
-    if (!v.paused) { this.resumeAfterAudioSwitch = true; try { v.pause(); } catch (e) {} }
-    this.cancelPump();
-    try { this.mp4.stop(); } catch (e) {}
-    try { this.mp4.unsetSegmentOptions(oldId); } catch (e) {}
-    this.releaseTrack(oldId);
-    this.releaseTrack(track.id);
-    this.queues.audio = [];
-
-    var sb = this.buffers.audio;
-    var ok = !!sb;
-    // appendBuffer is the standards-defined way to reopen an ended MediaSource.
-    // Use the current init segment (no media frames), then remove its old ranges.
-    if (ok && this.mediaSource.readyState === "ended") {
-      ok = await this.appendDirect(sb, this.initSegs[oldId], serial);
-    }
-    if (ok) ok = await this.removeAudioDirect(sb, serial);
-    var oldMime = oldTrack && this.audioMimeFor(oldTrack);
-    var newMime = this.audioMimeFor(track);
-    if (ok && oldMime !== newMime && !sb.changeType) {
-      this.audioSwitching = false;
-      this.audioBufferLocked = false;
-      this.reloadAudioTrack(index, at, "changeType unavailable");
-      return;
-    }
-    if (ok && sb.changeType) {
-      try { sb.changeType(newMime); }
-      catch (e) { trace("engine audio changeType failed: " + e); ok = false; }
-    }
-    if (ok) ok = await this.appendDirect(sb, this.initSegs[track.id], serial);
-    if (!ok || this.dead || serial !== this.switchSerial) {
-      this.audioSwitching = false;
-      this.audioBufferLocked = false;
-      this.reloadAudioTrack(index, at, "buffer reset failed");
-      return;
-    }
-
-    this.audioTrackId = track.id;
-    this.wantAudioIndex = index;
-    try { this.mp4.setSegmentOptions(track.id, null, { nbSamples: this.audioSegmentSamples }); }
-    catch (e) {
-      this.audioSwitching = false;
-      this.audioBufferLocked = false;
-      this.reloadAudioTrack(index, at, "track setup failed"); return;
-    }
-    var offset = this.seekOffset(Math.max(0, at - 0.75), false);
-    try { this.mp4.start(); } catch (e) {}
-    this.audioBufferLocked = false;
-    this.drain("audio");
-    this.pump(offset);
-    var covered = await this.waitForAudio(at, serial);
-    if (!covered || this.dead || serial !== this.switchSerial) {
-      this.audioSwitching = false;
-      this.reloadAudioTrack(index, at, "refill timeout");
-      return;
-    }
-    trace("engine audio → #" + index + " (native, " + (track.language || "?") + ")");
-    this.audioSwitching = false;
-    if (this.pendingAudioIndex != null && this.pendingAudioIndex !== this.wantAudioIndex) {
-      this.runAudioSwitch();
-      return;
-    }
-    this.pendingAudioIndex = null;
-    if (this.resumeAfterAudioSwitch) { this.resumeAfterAudioSwitch = false; play(); }
-  };
-  MseEngine.prototype.destroy = function () {
-    this.dead = true;
-    this.switchSerial++;
-    this.pendingAudioIndex = null;
-    this.audioBufferLocked = false;
-    this.fetchGen++;
-    if (this.inflightId != null) { cancelRequest(this.inflightId); this.inflightId = null; }
-    try { this.mp4.stop(); } catch (e) {}
-    try { URL.revokeObjectURL(this.objectUrl); } catch (e) {}
-  };
 
   var engine = null;
   // The last `load` command is retained only as a recovery path if a browser
   // cannot mutate its audio SourceBuffer or a native refill times out.
   var currentMedia = null;
-  if (new URL(location.href).searchParams.get("qa") === "1") {
+  if (param("qa") === "1") {
     window.PLEXCAST_QA = {
-      MseEngine: MseEngine,
+      MseEngine: window.MseEngine,
       video: v,
       fetchOverChannel: fetchOverChannel,
       setDataChannel: function (channel) { dc = channel; },
@@ -1592,11 +1161,40 @@
     // A multi-audio MP4 (sender flagged {mse:true}): demux in-browser so audio
     // can switch without reloading video. mp4box pulls byte windows over the
     // same data channel; subtitles ride as <track> overlays.
-    if (m.mse && window.MediaSource && typeof MP4Box !== "undefined") {
+    // Any direct file goes through the engine when it can run: it streams bounded
+    // byte windows (a 2017 TV runs out of memory on a whole-file Blob) and it is
+    // the only path that can switch audio tracks. The Service Worker route below
+    // stays for engines without MediaSource/mp4box.
+    if (!m.noEngine && window.MediaSource && typeof MP4Box !== "undefined" &&
+        typeof window.MseEngine !== "undefined") {
       setStatus("Buffering…", "Streaming over the connection");
       teardownEngine();
-      engine = new MseEngine(m.url, m.audioTypeIndex || 0);
+      engine = new window.MseEngine(m.url, m.audioTypeIndex || 0, channelFetcher);
       v.src = engine.objectUrl;
+      // The engine switches audio by reloading at the live position with the new
+      // track selected — the shape that survives an old TV demuxer.
+      engine.onAudioSwitch = function (index) {
+        if (!currentMedia) return;
+        var next = {}, at = v.currentTime || 0;
+        for (var key in currentMedia) if (Object.prototype.hasOwnProperty.call(currentMedia, key)) next[key] = currentMedia[key];
+        next.audioTypeIndex = index;
+        next.startTime = at;
+        loadMedia(next);
+      };
+      // An engine fatal on a modern browser can still fall back to the Service
+      // Worker / Blob route; where neither exists, say so rather than spin.
+      engine.onEngineFailed = function (reason) {
+        trace("engine failed: " + reason);
+        teardownEngine();
+        if (swReady && navigator.serviceWorker && navigator.serviceWorker.controller) {
+          var next = {}, at = v.currentTime || startTime || 0;
+          for (var key in m) if (Object.prototype.hasOwnProperty.call(m, key)) next[key] = m[key];
+          next.mse = false; next.noEngine = true; next.startTime = at;
+          loadMedia(next);
+        } else {
+          playbackError("This browser could not play the file over the connection.");
+        }
+      };
       v.addEventListener("loadedmetadata", function once() {
         v.removeEventListener("loadedmetadata", once);
         if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
@@ -1674,17 +1272,70 @@
   v.addEventListener("ended", function () { sendStatus({ ended: true }); });
 
   // ---- WebRTC answerer -------------------------------------------------------
-  function decode(blob) { var o = JSON.parse(atob(blob)); return o; }
+  // Written for old engines as well as current ones: Chromium 38 (webOS 3.x)
+  // exposes only webkitRTCPeerConnection, wants real RTCSessionDescription
+  // objects rather than plain ones, has callback-only SDP methods, and reads
+  // {url:...} ice entries. Passing callbacks uses the legacy overload that
+  // modern browsers still support, and any returned promise is wired to the
+  // same handlers — so exactly one path fires either way.
+  var PeerCtor = window.RTCPeerConnection || window.webkitRTCPeerConnection ||
+                 window.mozRTCPeerConnection || null;
+  var DescCtor = window.RTCSessionDescription || window.webkitRTCSessionDescription ||
+                 window.mozRTCSessionDescription || null;
+  var STUN_URLS = ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302",
+                   "stun:stun2.l.google.com:19302", "stun:stun.cloudflare.com:3478"];
+  function iceConfig() {
+    var servers = [];
+    for (var i = 0; i < STUN_URLS.length; i++) {
+      servers.push({ url: STUN_URLS[i], urls: [STUN_URLS[i]] });
+    }
+    return { iceServers: servers };
+  }
+  function sdpCall(pc, method, arg) {
+    return new Promise(function (resolve, reject) {
+      var settled = false;
+      function ok(x) { if (!settled) { settled = true; resolve(x); } }
+      function bad(e) { if (!settled) { settled = true; reject(e); } }
+      var out;
+      try { out = arg !== null ? pc[method](arg, ok, bad) : pc[method](ok, bad); }
+      catch (e) { bad(e); return; }
+      if (out && typeof out.then === "function") out.then(ok, bad);
+    });
+  }
+  function decode(blob) { return JSON.parse(atob(blob)); }
   function encode(desc) { return btoa(JSON.stringify({ type: desc.type, sdp: desc.sdp })); }
+  function describe(offer) {
+    if (!DescCtor) return offer;
+    try { return new DescCtor({ type: offer.type || "offer", sdp: offer.sdp }); }
+    catch (e) { return offer; }
+  }
+  /* An engine from the Chromium 38 era only parses the 2013 data-channel m-line
+     ("DTLS/SCTP <port>" + a=sctpmap); libwebrtc offers the modern
+     "UDP/DTLS/SCTP webrtc-datachannel" + a=sctp-port. Used only as a retry when
+     setRemoteDescription rejects the offer as sent. */
+  function legacySdp(sdp) {
+    var text = String(sdp), port = "5000";
+    var found = /a=sctp-port:(\d+)/.exec(text);
+    if (found) port = found[1];
+    text = text.replace(/^m=application (\d+) UDP\/DTLS\/SCTP webrtc-datachannel\s*$/m,
+                        "m=application $1 DTLS/SCTP " + port);
+    text = text.replace(/^a=sctp-port:\d+\s*$/m, "a=sctpmap:" + port + " webrtc-datachannel 1024");
+    return text;
+  }
+  function wait(ms) { return new Promise(function (res) { setTimeout(res, ms); }); }
 
-  async function connect() {
+  function connect() {
     disconnecting = false;   // fresh attempt — arm the drop handler again
-    var pc = new RTCPeerConnection({ iceServers: [{ urls: [
-      "stun:stun.l.google.com:19302",
-      "stun:stun1.l.google.com:19302",
-      "stun:stun2.l.google.com:19302",
-      "stun:stun.cloudflare.com:3478"
-    ] }] });
+    if (!PeerCtor) {
+      fail("This browser has no WebRTC support.");
+      return Promise.reject(new Error("no RTCPeerConnection"));
+    }
+    var pc;
+    try { pc = new PeerCtor(iceConfig()); }
+    catch (e) {
+      fail("This browser could not open a WebRTC connection.");
+      return Promise.reject(e);
+    }
     pc.ondatachannel = function (e) {
       dc = e.channel;
       dc.binaryType = "arraybuffer";
@@ -1710,10 +1361,13 @@
     window.PAGEPC = pc;   // QA observable
     window.PLEXCAST_ICE_LOG = window.PLEXCAST_ICE_LOG || [];
     pc.oniceconnectionstatechange = function () {
-      window.PLEXCAST_ICE_LOG.push(Date.now() % 100000 + " ice:" + pc.iceConnectionState);
+      window.PLEXCAST_ICE_LOG.push(nowMs() % 100000 + " ice:" + pc.iceConnectionState);
+      trace("ice " + pc.iceConnectionState);
     };
+    // connectionState is Chrome 72+; on older engines this never fires and a
+    // dead link surfaces through the ice state / channel close instead.
     pc.onconnectionstatechange = function () {
-      window.PLEXCAST_ICE_LOG.push(Date.now() % 100000 + " conn:" + pc.connectionState);
+      window.PLEXCAST_ICE_LOG.push(nowMs() % 100000 + " conn:" + pc.connectionState);
       if (pc.connectionState !== "failed") return;
       // Failing BEFORE a channel ever opened is a NAT-traversal problem; failing
       // after means the sender vanished (app quit, network drop) — go back to
@@ -1723,36 +1377,48 @@
     };
 
     setStatus("Connecting…", "Fetching connection info");
-    var signalOffer = await getOffer();
-    var offerBlob = signalOffer.sdp;
-    trace("getOffer ok len=" + offerBlob.length);
-    await pc.setRemoteDescription(decode(offerBlob));
-    var answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    // Non-trickle: wait for ICE gathering to finish so the answer is complete.
-    await new Promise(function (res) {
-      if (pc.iceGatheringState === "complete") return res();
-      var t = setTimeout(res, 4000);
-      pc.onicegatheringstatechange = function () {
-        if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); }
-      };
+    var signalOffer = null;
+    return getOffer().then(function (offer) {
+      signalOffer = offer;
+      trace("getOffer ok len=" + offer.sdp.length);
+      var parsed = decode(offer.sdp);
+      return sdpCall(pc, "setRemoteDescription", describe(parsed)).catch(function (e) {
+        var rewritten = legacySdp(parsed.sdp);
+        if (rewritten === parsed.sdp) throw e;
+        trace("setRemoteDescription failed (" + (e && e.message || e) + ") — retrying with legacy DTLS/SCTP");
+        return sdpCall(pc, "setRemoteDescription", describe({ type: parsed.type, sdp: rewritten }));
+      });
+    }).then(function () {
+      return sdpCall(pc, "createAnswer", null);
+    }).then(function (answer) {
+      return sdpCall(pc, "setLocalDescription", answer);
+    }).then(function () {
+      // Non-trickle: wait for ICE gathering to finish so the answer is complete.
+      return new Promise(function (res) {
+        if (pc.iceGatheringState === "complete") { res(); return; }
+        var t = setTimeout(res, 4000);
+        pc.onicegatheringstatechange = function () {
+          if (pc.iceGatheringState === "complete") { clearTimeout(t); res(); }
+        };
+      });
+    }).then(function () {
+      setStatus("Connecting…", "Handing back the answer");
+      return postAnswer(encode(pc.localDescription), signalOffer.generation);
+    }).then(function () {
+      trace("answer posted for room " + room.slice(0, 8));
+      // Give ICE its normal connection window. The sender acknowledges and clears
+      // the generation over its own socket; if ICE still does not open, its
+      // handshake watchdog publishes a fresh generation and this socket receives
+      // it without polling.
+      return wait(12000);
+    }).then(function () {
+      if (!wasConnected) {
+        trace("retry: answer sent but ICE never connected");
+        try { pc.close(); } catch (x) {}
+        dc = null;
+        throw { retry: true };
+      }
     });
-    setStatus("Connecting…", "Handing back the answer");
-    await postAnswer(encode(pc.localDescription), signalOffer.generation);
-    trace("answer posted for room " + room.slice(0,8));
-
-    // Give ICE its normal connection window. The sender acknowledges and clears
-    // the generation over its own socket; if ICE still does not open, its
-    // handshake watchdog publishes a fresh generation and this socket receives
-    // it without polling.
-    await new Promise(function (res) { setTimeout(res, 12000); });
-    if (!wasConnected) {
-      trace("retry: answer sent but ICE never connected");
-      try { pc.close(); } catch (x) {}
-      dc = null;
-      throw { retry: true };
-    }
   }
 
   function start(attempt) {

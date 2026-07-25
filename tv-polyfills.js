@@ -1,52 +1,6 @@
-<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Plex Downloader — TV Receiver</title>
-<style>
-  /* Old-TV-safe on purpose: no CSS variables (Chrome 49+), no inset
-     (Chrome 87+) — webOS 3.x is Chromium 38. */
-  html,body{margin:0;height:100%;background:#16172B;color:#fff;font:16px -apple-system,system-ui,sans-serif}
-  #stage{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center}
-  video{max-width:100%;max-height:100%;background:#000}
-  #idle{text-align:center;padding:36px 44px;background:rgba(255,255,255,.04);
-        border:1px solid rgba(245,158,66,.25);border-radius:18px;max-width:460px}
-  .mark{width:66px;height:66px;margin:0 auto 14px;display:block;border-radius:16px}
-  .wordmark{font-size:12px;letter-spacing:3.5px;text-transform:uppercase;color:#F59E42;margin:0 0 16px}
-  #idle h1{font-weight:600;font-size:20px;margin:0 0 14px}
-  .spinner{width:28px;height:28px;margin:0 auto 14px;border-radius:50%;
-           border:3px solid rgba(245,158,66,.18);border-top-color:#F59E42;
-           animation:spin .9s linear infinite}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  #status{color:#9aa3b5;margin:0;font-size:14px;line-height:1.5}
-  #tap{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;
-       background:rgba(0,0,0,.85);font-size:20px;cursor:pointer;z-index:10}
-  .hidden{display:none !important}
-</style></head><body>
-<div id="stage">
-  <div id="idle">
-    <img class="mark" src="icon.png" alt="">
-    <p class="wordmark">Plex Downloader</p>
-    <h1>Ready to receive</h1>
-    <div class="spinner"></div>
-    <p id="status">Connecting to the sender… (r3)</p>
-  </div>
-  <video id="v" class="hidden" controls playsinline></video>
-</div>
-<div id="tap" class="hidden">Tap to start</div>
-<script>
-/* Tripwire bootstrap — deliberately 1990s JavaScript, parsed before
-   anything modern. Its onerror catches even PARSE errors in the main
-   block below, and the marker proves scripts execute at all: a TV
-   stuck on the bare "(r2)" text without "js ok" runs no JS. */
-window.onerror = function(m, s, l) {
-  var el = document.getElementById('status');
-  if (el) { el.textContent = 'Script error: ' + m + ' (line ' + l + ')'; }
-  if (window.tvReport) { try { window.tvReport('page error: ' + m + ' (' + String(s || '').split('/').pop() + ':' + l + ')'); } catch (e) {} }
-  return false;
-};
-(function() {
-  var el = document.getElementById('status');
-  if (el) { el.textContent = el.textContent + ' · js ok'; }
-})();
+/* Shared old-TV runtime polyfills — loaded by BOTH receivers (the LAN page
+   tv.html and the hosted index.html) so the two can never drift.
+
 /* ES2015+ runtime polyfills for 2017-era TV engines (webOS 3.x is
    Chromium 38). hls.js 1.x parses as ES5 but calls Object.assign /
    Object.entries / includes / find at runtime — without these, HLS
@@ -127,10 +81,3 @@ window.onerror = function(m, s, l) {
     return value < 0 ? Math.ceil(value) : Math.floor(value);
   });
 })();
-</script>
-<script>window.WS_PORT=0;window.SENDER="the sender";</script>
-<script src="mp4box.all.min.js"></script>
-<script src="tv-mse.js"></script>
-<script src="tv-rtc.js"></script>
-<script src="tv-main.js"></script>
-</body></html>
