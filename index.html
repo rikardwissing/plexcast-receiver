@@ -94,13 +94,24 @@
     min-height: 18px; }
 
 
+  /* A fixed, centred stage clips anything taller than the screen — on a phone
+     that hid the QR and its instructions with no way to scroll to them. Let the
+     stage scroll instead, and centre with auto margins so tall content starts
+     at the top rather than losing its head. */
+  #stage { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .card { margin: auto; }
+
   /* The landing has two ways in — type a code, or scan. Stacked on a phone;
      side by side on anything landscape, because a 720p TV clipped the stacked
      version top and bottom and a TV cannot scroll. */
   .entry-col { display: block; }
-  #entry { max-height: 90vh; }
   #qr img { display: block; margin: 0 auto; width: auto; height: auto; max-width: 100%; max-height: 26vh; }
   .scanhint { max-width: 320px; margin-left: auto; margin-right: auto; }
+  .signal-error:empty { display: none; }   /* no error, no reserved gap */
+  /* Text-only affordance; shown only where the QR is collapsed (phones). */
+  .linkbtn { display: none; margin: 14px auto 0; padding: 8px 4px;
+    background: none; border: 0; cursor: pointer;
+    font-size: 14px; font-weight: 600; color: #F59E42; color: var(--accent); }
   @media (min-width: 820px) and (orientation: landscape) {
     #entry { display: flex; align-items: center; text-align: center; max-width: 900px; }
     .entry-code { flex: 1 1 auto; padding-right: 40px; }
@@ -157,6 +168,36 @@
   #qr { width: 180px; height: 180px; margin: 0 auto 16px; padding: 12px; border-radius: 16px;
     background: #fff; box-sizing: border-box; }
   #qr img, #qr canvas { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+
+  /* Phones: everything down a size, and the QR to a size that reads as the
+     secondary path it is. (Scanning is for a TV screen — on a phone the code
+     is the way in.) env() is ignored by engines that lack it, so the plain
+     padding above stays the fallback. */
+  @media (max-width: 520px) {
+    #stage { padding: 16px 14px calc(16px + env(safe-area-inset-bottom)); }
+    .card { padding: 26px 20px; border-radius: 24px; }
+    .mark { width: 54px; height: 54px; margin-bottom: 14px; }
+    .wordmark { font-size: 11px; letter-spacing: 3px; margin-bottom: 12px; }
+    h1 { font-size: 22px; }
+    .sub { font-size: 14px; max-width: 264px; margin-left: auto; margin-right: auto; }
+    .cell { width: 52px; height: 64px; border-radius: 15px; font-size: 34px; }
+    .cell + .cell { margin-left: 10px; }
+    .otp { margin: 2px 0 18px; }
+    .btn { height: 50px; font-size: 16px; }
+    #scan { margin-top: 16px; }
+    #scan .scanor { margin: 16px 0 14px; }
+    #qr img { max-height: 168px; }
+    .scanhint { font-size: 13px; max-width: 252px; margin-bottom: 0; }
+    /* A QR is for a camera pointed at ANOTHER screen — on a phone it is the
+       rare path, and at 180px tall it crowded out the code entry. Collapsed
+       behind one line of text, revealed on demand. */
+    #scan { display: none; }
+    #scan.revealed { display: block; }
+    #scanmore { display: block; }
+    .sub { margin-bottom: 20px; }
+    .mark { width: 50px; height: 50px; margin-bottom: 12px; }
+    .pairrow { padding: 9px 12px; }
+  }
 </style>
 </head>
 <body>
@@ -203,6 +244,7 @@
       </div>
       <button id="go" class="btn" disabled>Watch</button>
       <div id="signal-error" class="signal-error" role="status" aria-live="polite"></div>
+      <button id="scanmore" class="linkbtn hidden">Scan a code instead</button>
       </div>
       <div id="scan" class="entry-col hidden">
         <p class="scanor">or</p>
@@ -561,6 +603,17 @@
         document.getElementById("qr").innerHTML = qr.createImgTag(5, 0);
         document.getElementById("scan").classList.remove("hidden");
       } catch (e) { scanRoom = ""; }
+    })();
+
+    // Phones collapse the QR (see the CSS note); one tap brings it back.
+    (function () {
+      var more = document.getElementById("scanmore");
+      if (!more || !scanRoom) return;
+      more.classList.remove("hidden");
+      more.addEventListener("click", function () {
+        document.getElementById("scan").classList.add("revealed");
+        more.style.display = "none";
+      });
     })();
 
     function acceptLandingOffer(offer, socket, target) {
