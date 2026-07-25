@@ -717,7 +717,7 @@
         if (obj.sender) {
           sender = String(obj.sender).slice(0, 40);
           window.PLEXCAST_SENDER = sender;   // observable for debugging/QA
-          setStatus("Connected", "Waiting for " + sender + " to start a video…");
+          setStatus("Ready to cast", "Choose something to play in " + sender);
         }
         break;
       case "pair":
@@ -902,13 +902,19 @@
   var hls = null;
   var stallTimer = null;
   function clearStall() { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; } }
+  /* Playback finished, or the sender stopped casting: the connection is still
+     up, so this is the same "ready for the next pick" screen the other two
+     receivers show — an invitation, not a dead end reading "Stopped". The
+     spinner means "working on it", so it stops here. */
   function stopMedia() {
     clearStall();
     if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
     teardownEngine();
     clearSubtitles();
     v.pause(); v.removeAttribute("src"); v.load();
-    showPanel(); setStatus("Stopped", "");
+    showPanel();
+    panel.querySelector(".spinner").style.display = "none";
+    setStatus("Ready to cast", "Choose something to play in " + sender);
   }
 
   // A decode/codec failure: swap the video for a visible explanation (the old
@@ -1139,6 +1145,7 @@
 
   function loadMedia(m) {
     stopMedia();                 // pauses the old media → a final OLD-gen status
+    panel.querySelector(".spinner").style.display = "";   // buffering again
     stopped = false;             // a fresh load = active again (clears any prior stop)
     currentMedia = m;            // remembered so an audio switch can rebuild from it
     currentGen = m.gen || 0;     // now the current load; new statuses carry this
@@ -1402,7 +1409,8 @@
         wasConnected = true;
         reconnecting = false;   // reconnected — stop the loop and drop the overlay now
         hideReconnect();
-        setStatus("Connected", "Waiting for " + sender + " to start a video…");
+        panel.querySelector(".spinner").style.display = "none";
+        setStatus("Ready to cast", "Choose something to play in " + sender);
         // The hello carries the pairing tokens this browser holds, so a sender
         // that already knows one recognises us and reuses it — connecting with
         // a fresh code doesn't create a duplicate pairing on either end.
