@@ -203,20 +203,28 @@
      the mark and wordmark survive — and the QR stays square because its
      CONTAINER is sized, never the image. */
   @media (orientation: landscape) and (max-height: 520px) {
-    #stage { padding: 12px 16px; }
-    #entry, #panel { padding: 20px 26px; }
+    /* Generous side margins and a capped card: filling a phone's full width
+       edge to edge left the two columns stranded far apart, which read as
+       stretched rather than roomy. */
+    #stage { padding: 14px 34px; }
+    #entry, #panel { padding: 18px 24px; max-width: 560px; }
     .mark { width: 40px; height: 40px; margin-bottom: 10px; }
     .wordmark { font-size: 10px; letter-spacing: 2.6px; margin-bottom: 10px; }
     #entry h1, #panel h1 { font-size: 20px; margin-bottom: 4px; }
-    .sub { font-size: 13px; margin-bottom: 14px; max-width: 260px; }
+    /* Let the instruction use the column it has (a 260px cap made it wrap on
+       "app."), and give the scan column less so the code column gets more. */
+    .sub { font-size: 13px; margin-bottom: 14px; max-width: none; }
     .cell { width: 46px; height: 56px; border-radius: 14px; font-size: 30px; }
     .cell + .cell { margin-left: 9px; }
     .otp { margin: 2px 0 14px; }
     .btn { height: 42px; font-size: 15px; }
-    .entry-code { padding-right: 28px; }
-    #scan.entry-col { padding-left: 28px; }
-    #qr { width: 132px; height: 132px; padding: 9px; margin-bottom: 10px; }
-    .scanhint { font-size: 12px; max-width: 232px; margin-bottom: 0; }
+    /* Columns closer together, and the button sized to its label instead of
+       spanning the whole column. */
+    .entry-code { padding-right: 20px; }
+    #scan.entry-col { padding-left: 20px; }
+    .btn { max-width: 230px; margin-left: auto; margin-right: auto; }
+    #qr { width: 124px; height: 124px; padding: 8px; margin-bottom: 8px; }
+    .scanhint { font-size: 12px; max-width: 196px; margin-bottom: 0; }
     .spinner { width: 34px; height: 34px; margin: 6px auto 12px; }
   }
 </style>
