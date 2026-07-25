@@ -1291,15 +1291,26 @@
     }
     return { iceServers: servers };
   }
+  /* Try the modern promise form FIRST and only fall back to the callback form
+     when the engine refuses it. Passing callbacks *and* wiring the returned
+     promise looks tolerant but is a bug: a browser that supports both invokes
+     the callback AND resolves the promise — with undefined — so the two race,
+     and createAnswer can hand setLocalDescription an undefined description
+     ("Failed to parse SessionDescription"). Chromium 38 has no promise form and
+     throws TypeError for the missing callbacks, which selects the legacy path. */
   function sdpCall(pc, method, arg) {
     return new Promise(function (resolve, reject) {
+      var out = null, modern = false;
+      try {
+        out = (arg === null || arg === undefined) ? pc[method]() : pc[method](arg);
+        modern = !!(out && typeof out.then === "function");
+      } catch (e) { modern = false; }
+      if (modern) { out.then(resolve, reject); return; }
       var settled = false;
       function ok(x) { if (!settled) { settled = true; resolve(x); } }
       function bad(e) { if (!settled) { settled = true; reject(e); } }
-      var out;
-      try { out = arg !== null ? pc[method](arg, ok, bad) : pc[method](ok, bad); }
-      catch (e) { bad(e); return; }
-      if (out && typeof out.then === "function") out.then(ok, bad);
+      try { (arg === null || arg === undefined) ? pc[method](ok, bad) : pc[method](arg, ok, bad); }
+      catch (e2) { bad(e2); }
     });
   }
   function decode(blob) { return JSON.parse(atob(blob)); }
