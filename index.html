@@ -27,7 +27,9 @@
       radial-gradient(900px 620px at 88% 116%, rgba(158,120,240,0.16), transparent 60%),
       var(--deep); }
   #stage { position: fixed; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center;
-    justify-content: center; padding: 24px; }
+    justify-content: center; padding: 24px; box-sizing: border-box; }
+  /* A TV crops the edges of the picture — keep the card inside the safe area. */
+  @media (min-width: 1280px) { #stage { padding: 5vh 6vw; } }
   video { position: fixed; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%;
     background: #000; object-fit: contain; }
   .hidden { display: none !important; }
@@ -50,7 +52,10 @@
   .sub { color: #9095AD; color: var(--muted); font-size: 15px; margin: 0 0 26px; }
 
   /* OTP-style code entry: four cells over one hidden input. */
-  .otp { position: relative; display: flex; gap: 12px; justify-content: center; margin: 4px 0 26px; }
+  /* Explicit margins instead of flex `gap` (Chromium 84+) so the spacing
+     survives on old TV engines. */
+  .otp { position: relative; display: flex; justify-content: center; margin: 4px 0 22px; }
+  .cell + .cell { margin-left: 12px; }
   .cell { width: 60px; height: 76px; border-radius: 18px;
     background: rgba(255,255,255,0.04); border: 1.5px solid rgba(255,255,255,0.13);
     display: flex; align-items: center; justify-content: center;
@@ -65,16 +70,22 @@
   #code { position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; opacity: 0;
     border: 0; background: transparent; cursor: pointer; }
 
-  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  .btn { display: inline-flex; align-items: center; justify-content: center;
     width: 100%; height: 54px; border: 0; border-radius: 16px; cursor: pointer;
     font-size: 17px; font-weight: 700; color: #2A1305; background-image: linear-gradient(135deg, #F59E42, #E85E52); background-image: var(--glow);
     box-shadow: 0 14px 32px -12px rgba(245,158,66,0.65);
     transition: transform .1s, filter .15s, opacity .15s; }
   .btn:active { transform: translateY(1px); filter: brightness(0.96); }
-  .btn:disabled { filter: grayscale(0.55) brightness(0.7); box-shadow: none;
-    cursor: default; opacity: 0.7; }
+  /* Disabled reads as an empty field waiting for input, not as a muddy amber
+     bar: greyscaling a gradient looked like a rendering fault on a TV. */
+  .btn:disabled {
+    background-image: none; background-color: rgba(255,255,255,0.06);
+    color: #9095AD; color: var(--muted);
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: none; cursor: default; opacity: 1;
+  }
 
-  .spinner { width: 44px; height: 44px; margin: 2px auto 18px;
+  .spinner { width: 44px; height: 44px; margin: 10px auto 18px;
     border: 3.5px solid rgba(245,158,66,0.18); border-top-color: #F59E42; border-top-color: var(--accent);
     border-radius: 50%; animation: spin 0.9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -82,6 +93,35 @@
   .signal-error { color: #ff8d86; font-size: 13px; line-height: 1.35; margin: 14px 0 0;
     min-height: 18px; }
 
+
+  /* The landing has two ways in — type a code, or scan. Stacked on a phone;
+     side by side on anything landscape, because a 720p TV clipped the stacked
+     version top and bottom and a TV cannot scroll. */
+  .entry-col { display: block; }
+  #entry { max-height: 90vh; }
+  #qr img { display: block; margin: 0 auto; width: auto; height: auto; max-width: 100%; max-height: 26vh; }
+  .scanhint { max-width: 320px; margin-left: auto; margin-right: auto; }
+  @media (min-width: 820px) and (orientation: landscape) {
+    #entry { display: flex; align-items: center; text-align: center; max-width: 900px; }
+    .entry-code { flex: 1 1 auto; padding-right: 40px; }
+    #scan.entry-col {
+      flex: 0 0 auto; padding-left: 40px;
+      border-left: 1px solid rgba(255,255,255,0.08);
+    }
+    #scan .scanor { display: none; }        /* the divider says it now */
+  }
+  /* Ten-foot read on a TV panel. */
+  @media (min-width: 1280px) {
+    #entry, #panel { padding: 44px 52px; }
+    #entry h1, #panel h1 { font-size: 40px; }
+    .sub { font-size: 19px; }
+    .cell { width: 76px; height: 96px; font-size: 52px; }
+    .btn { font-size: 21px; padding: 18px 30px; }
+    #status { font-size: 18px; }
+    .mark { width: 84px; height: 84px; }
+    .wordmark { font-size: 15px; }
+    #qr img { max-height: 30vh; }
+  }
 
   /* Reconnect overlay over the frozen video. */
   #reconnect { position: fixed; top: 0; left: 0; right: 0; bottom: 0; display: none; align-items: center; justify-content: center;
@@ -95,9 +135,10 @@
   #pairs { margin: -8px 0 22px; text-align: left; }
   #pairs .pairhead { font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
     color: #9095AD; color: var(--muted); font-weight: 700; margin: 0 0 8px; text-align: center; }
-  .pairrow { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  .pairrow { display: flex; align-items: center; padding: 10px 14px;
     border-radius: 14px; background: rgba(255,255,255,0.045);
     border: 1px solid rgba(255,255,255,0.08); margin-bottom: 8px; }
+  .pairrow > * + * { margin-left: 10px; }
   .pairrow .dot { width: 8px; height: 8px; border-radius: 50%; background: #F59E42; background: var(--accent);
     animation: pulse 1.6s ease-in-out infinite; flex: none; }
   @keyframes pulse { 50% { opacity: 0.25; } }
@@ -142,6 +183,7 @@
     <!-- Connecting / status -->
     <div id="panel" class="card">
       <img class="mark" src="icon.png" alt="">
+      <p class="wordmark">Plex Downloader</p>
       <div class="spinner"></div>
       <h1>Connecting…</h1>
       <div id="status">Reaching the sender</div>
@@ -149,6 +191,7 @@
 
     <!-- Code-entry landing -->
     <div id="entry" class="card hidden">
+      <div class="entry-col entry-code">
       <img class="mark" src="icon.png" alt="">
       <p class="wordmark">Plex Downloader</p>
       <h1>Enter your code</h1>
@@ -160,10 +203,11 @@
       </div>
       <button id="go" class="btn" disabled>Watch</button>
       <div id="signal-error" class="signal-error" role="status" aria-live="polite"></div>
-      <div id="scan" class="hidden">
+      </div>
+      <div id="scan" class="entry-col hidden">
         <p class="scanor">or</p>
         <div id="qr" aria-label="Pairing QR code"></div>
-        <p class="sub">Scan with the Plex Downloader app (or your camera) to connect this screen — no typing.</p>
+        <p class="sub scanhint">Scan with the Plex Downloader app (or your camera) to connect this screen — no typing.</p>
       </div>
     </div>
   </div>
