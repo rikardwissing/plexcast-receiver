@@ -105,14 +105,13 @@
      side by side on anything landscape, because a 720p TV clipped the stacked
      version top and bottom and a TV cannot scroll. */
   .entry-col { display: block; }
-  #qr img { display: block; margin: 0 auto; width: auto; height: auto; max-width: 100%; max-height: 26vh; }
   .scanhint { max-width: 320px; margin-left: auto; margin-right: auto; }
   .signal-error:empty { display: none; }   /* no error, no reserved gap */
   /* Text-only affordance; shown only where the QR is collapsed (phones). */
   .linkbtn { display: none; margin: 14px auto 0; padding: 8px 4px;
     background: none; border: 0; cursor: pointer;
     font-size: 14px; font-weight: 600; color: #F59E42; color: var(--accent); }
-  @media (min-width: 820px) and (orientation: landscape) {
+  @media (min-width: 660px) and (orientation: landscape) {
     #entry { display: flex; align-items: center; text-align: center; max-width: 900px; }
     .entry-code { flex: 1 1 auto; padding-right: 40px; }
     #scan.entry-col {
@@ -131,7 +130,7 @@
     #status { font-size: 18px; }
     .mark { width: 84px; height: 84px; }
     .wordmark { font-size: 15px; }
-    #qr img { max-height: 30vh; }
+    #qr { width: 220px; height: 220px; }
   }
 
   /* Reconnect overlay over the frozen video. */
@@ -186,7 +185,7 @@
     .btn { height: 50px; font-size: 16px; }
     #scan { margin-top: 16px; }
     #scan .scanor { margin: 16px 0 14px; }
-    #qr img { max-height: 168px; }
+    #qr { width: 168px; height: 168px; padding: 10px; }
     .scanhint { font-size: 13px; max-width: 252px; margin-bottom: 0; }
     /* A QR is for a camera pointed at ANOTHER screen — on a phone it is the
        rare path, and at 180px tall it crowded out the code entry. Collapsed
@@ -197,6 +196,28 @@
     .sub { margin-bottom: 20px; }
     .mark { width: 50px; height: 50px; margin-bottom: 12px; }
     .pairrow { padding: 9px 12px; }
+  }
+
+  /* Landscape phones: two columns already, but the card ran off a 390px-tall
+     screen at full size. Everything shrinks rather than anything being cut, so
+     the mark and wordmark survive — and the QR stays square because its
+     CONTAINER is sized, never the image. */
+  @media (orientation: landscape) and (max-height: 520px) {
+    #stage { padding: 12px 16px; }
+    #entry, #panel { padding: 20px 26px; }
+    .mark { width: 40px; height: 40px; margin-bottom: 10px; }
+    .wordmark { font-size: 10px; letter-spacing: 2.6px; margin-bottom: 10px; }
+    #entry h1, #panel h1 { font-size: 20px; margin-bottom: 4px; }
+    .sub { font-size: 13px; margin-bottom: 14px; max-width: 260px; }
+    .cell { width: 46px; height: 56px; border-radius: 14px; font-size: 30px; }
+    .cell + .cell { margin-left: 9px; }
+    .otp { margin: 2px 0 14px; }
+    .btn { height: 42px; font-size: 15px; }
+    .entry-code { padding-right: 28px; }
+    #scan.entry-col { padding-left: 28px; }
+    #qr { width: 132px; height: 132px; padding: 9px; margin-bottom: 10px; }
+    .scanhint { font-size: 12px; max-width: 232px; margin-bottom: 0; }
+    .spinner { width: 34px; height: 34px; margin: 6px auto 12px; }
   }
 </style>
 </head>
