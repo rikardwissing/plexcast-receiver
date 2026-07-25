@@ -5,6 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" type="image/png" href="icon.png">
   <title>Plex Downloader</title>
+<script>
+/* Old-engine escape hatch — deliberately 1990s JavaScript, and deliberately in
+   its own script block: blocks compile independently, so this runs even though
+   the receiver below is a syntax error on a 2017 TV (async/await). Those TVs
+   would otherwise sit forever on the static "Connecting… / Reaching the sender"
+   markup, unstyled (the CSS uses custom properties they don't support).
+   tv.html is the ES5 receiver — same proven MSE engine as the LAN page. */
+(function () {
+  try { new Function('return (async function () {})'); return; } catch (e) {}
+  try {
+    var to = 'tv.html' + (location.search || '') + (location.hash || '');
+    if (location.replace) location.replace(to); else location.href = to;
+  } catch (e2) {}
+})();
+</script>
 <style>
   :root {
     color-scheme: dark;

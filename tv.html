@@ -1,0 +1,136 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Plex Downloader — TV Receiver</title>
+<style>
+  /* Old-TV-safe on purpose: no CSS variables (Chrome 49+), no inset
+     (Chrome 87+) — webOS 3.x is Chromium 38. */
+  html,body{margin:0;height:100%;background:#16172B;color:#fff;font:16px -apple-system,system-ui,sans-serif}
+  #stage{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center}
+  video{max-width:100%;max-height:100%;background:#000}
+  #idle{text-align:center;padding:36px 44px;background:rgba(255,255,255,.04);
+        border:1px solid rgba(245,158,66,.25);border-radius:18px;max-width:460px}
+  .mark{width:66px;height:66px;margin:0 auto 14px;display:block;border-radius:16px}
+  .wordmark{font-size:12px;letter-spacing:3.5px;text-transform:uppercase;color:#F59E42;margin:0 0 16px}
+  #idle h1{font-weight:600;font-size:20px;margin:0 0 14px}
+  .spinner{width:28px;height:28px;margin:0 auto 14px;border-radius:50%;
+           border:3px solid rgba(245,158,66,.18);border-top-color:#F59E42;
+           animation:spin .9s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #status{color:#9aa3b5;margin:0;font-size:14px;line-height:1.5}
+  #tap{position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;
+       background:rgba(0,0,0,.85);font-size:20px;cursor:pointer;z-index:10}
+  .hidden{display:none !important}
+</style></head><body>
+<div id="stage">
+  <div id="idle">
+    <img class="mark" src="icon.png" alt="">
+    <p class="wordmark">Plex Downloader</p>
+    <h1>Ready to receive</h1>
+    <div class="spinner"></div>
+    <p id="status">Connecting to the sender… (r3)</p>
+  </div>
+  <video id="v" class="hidden" controls playsinline></video>
+</div>
+<div id="tap" class="hidden">Tap to start</div>
+<script>
+/* Tripwire bootstrap — deliberately 1990s JavaScript, parsed before
+   anything modern. Its onerror catches even PARSE errors in the main
+   block below, and the marker proves scripts execute at all: a TV
+   stuck on the bare "(r2)" text without "js ok" runs no JS. */
+window.onerror = function(m, s, l) {
+  var el = document.getElementById('status');
+  if (el) { el.textContent = 'Script error: ' + m + ' (line ' + l + ')'; }
+  if (window.tvReport) { try { window.tvReport('page error: ' + m + ' (' + String(s || '').split('/').pop() + ':' + l + ')'); } catch (e) {} }
+  return false;
+};
+(function() {
+  var el = document.getElementById('status');
+  if (el) { el.textContent = el.textContent + ' · js ok'; }
+})();
+/* ES2015+ runtime polyfills for 2017-era TV engines (webOS 3.x is
+   Chromium 38). hls.js 1.x parses as ES5 but calls Object.assign /
+   Object.entries / includes / find at runtime — without these, HLS
+   playback dies silently on the TV while working everywhere else. */
+(function() {
+  /* Every polyfill goes in through defineProperty so it is NON-ENUMERABLE,
+     exactly like the native would be. A plain assignment shows up in for-in
+     loops — mp4box iterates arrays that way, and on the TV it walked our
+     Array.prototype.includes/find/findIndex as if they were sample groups
+     and crashed. Chrome 38 supports defineProperty fully. */
+  function def(obj, name, fn) {
+    if (obj[name]) return;
+    try { Object.defineProperty(obj, name, { value: fn, writable: true, configurable: true, enumerable: false }); }
+    catch (e) { obj[name] = fn; }
+  }
+  def(Object, 'assign', function(target) {
+    for (var i = 1; i < arguments.length; i++) {
+      var source = arguments[i];
+      if (source == null) continue;
+      for (var key in source) if (Object.prototype.hasOwnProperty.call(source, key)) target[key] = source[key];
+    }
+    return target;
+  });
+  def(Object, 'entries', function(obj) {
+    var out = [];
+    for (var key in obj) if (Object.prototype.hasOwnProperty.call(obj, key)) out.push([key, obj[key]]);
+    return out;
+  });
+  def(Object, 'values', function(obj) {
+    var out = [];
+    for (var key in obj) if (Object.prototype.hasOwnProperty.call(obj, key)) out.push(obj[key]);
+    return out;
+  });
+  def(String.prototype, 'includes', function(search, start) {
+    return this.indexOf(search, start || 0) !== -1;
+  });
+  def(String.prototype, 'padStart', function(length, pad) {
+    var out = String(this); pad = pad === undefined ? ' ' : String(pad);
+    while (out.length < length && pad.length) out = pad.charAt(out.length % pad.length) + out;
+    return out;
+  });
+  def(String.prototype, 'padEnd', function(length, pad) {
+    var out = String(this); pad = pad === undefined ? ' ' : String(pad);
+    while (out.length < length && pad.length) out = out + pad.charAt((out.length - 1) % pad.length);
+    return out;
+  });
+  def(String.prototype, 'startsWith', function(search, start) {
+    start = start || 0;
+    return this.substring(start, start + search.length) === search;
+  });
+  def(String.prototype, 'endsWith', function(search, length) {
+    if (length === undefined || length > this.length) length = this.length;
+    return this.substring(length - search.length, length) === search;
+  });
+  def(Array.prototype, 'includes', function(item) {
+    return this.indexOf(item) !== -1;
+  });
+  def(Array.prototype, 'find', function(fn) {
+    for (var i = 0; i < this.length; i++) if (fn(this[i], i, this)) return this[i];
+    return undefined;
+  });
+  def(Array.prototype, 'findIndex', function(fn) {
+    for (var i = 0; i < this.length; i++) if (fn(this[i], i, this)) return i;
+    return -1;
+  });
+  def(Array, 'from', function(like, fn) {
+    var out = [];
+    for (var i = 0; i < like.length; i++) out.push(fn ? fn(like[i], i) : like[i]);
+    return out;
+  });
+  def(Number, 'isFinite', function(value) {
+    return typeof value === 'number' && isFinite(value);
+  });
+  def(Number, 'isInteger', function(value) {
+    return typeof value === 'number' && isFinite(value) && Math.floor(value) === value;
+  });
+  def(Math, 'trunc', function(value) {
+    return value < 0 ? Math.ceil(value) : Math.floor(value);
+  });
+})();
+</script>
+<script>window.WS_PORT=0;window.SENDER="the sender";</script>
+<script src="mp4box.all.min.js"></script>
+<script src="tv-mse.js"></script>
+<script src="tv-rtc.js"></script>
+<script src="tv-main.js"></script>
+</body></html>
