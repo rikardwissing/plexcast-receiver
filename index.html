@@ -124,12 +124,15 @@
     font-size: 14px; font-weight: 600; color: #F59E42; color: var(--accent); }
   @media (min-width: 660px) and (orientation: landscape) {
     #entry { display: flex; align-items: center; text-align: center; max-width: 900px; }
-    .entry-code { flex: 1 1 auto; padding-right: 40px; }
+    /* Equal air either side of the line. The divider box begins at #scan's
+       left edge and centres its rule, so the right column has to clear a
+       further half-box: padding-left = padding-right + box width. */
+    .entry-code { flex: 1 1 auto; padding-right: 22px; }
     /* The divider IS the "or" here: a line, the word, a line — running down
        the gap instead of a bare rule with the label hidden. */
     #scan.entry-col {
       position: relative;
-      flex: 0 0 auto; padding-left: 52px; border-left: 0;
+      flex: 0 0 auto; padding-left: 64px; border-left: 0;   /* 22 + 42 */
     }
     #scan .scanor {
       display: flex; flex-direction: column; align-items: center;
@@ -246,8 +249,13 @@
     .btn { height: 42px; font-size: 15px; }
     /* Columns closer together, and the button sized to its label instead of
        spanning the whole column. */
-    .entry-code { padding-right: 20px; }
-    #scan.entry-col { padding-left: 20px; }
+    /* A phone in landscape has far less width to give away: a narrower
+       divider box, the same equal-gap arithmetic (12 + 32), and shorter line
+       segments so the rule does not crowd the label in a short card. */
+    .entry-code { padding-right: 12px; }
+    #scan.entry-col { padding-left: 44px; }
+    #scan .scanor { width: 32px; font-size: 10px; letter-spacing: 1.5px; }
+    #scan .scanor::before, #scan .scanor::after { margin: 7px 0; }
     .btn { max-width: 230px; margin-left: auto; margin-right: auto; }
     #qr { width: 124px; height: 124px; padding: 8px; margin-bottom: 8px; }
     .scanhint { font-size: 12px; max-width: 196px; margin-bottom: 0; }
