@@ -180,8 +180,11 @@
   .pairrow .name { flex: 1; font-size: 15px; font-weight: 600; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pairrow .hint { color: #9095AD; color: var(--muted); font-size: 12px; flex: none; }
+  /* A word now, not an ×: it forgets every paired device, which is too much
+     to hang off a glyph. */
   .pairrow .forget { flex: none; border: 0; background: transparent; color: #9095AD; color: var(--muted);
-    font-size: 17px; cursor: pointer; padding: 2px 6px; border-radius: 8px; }
+    font-size: 12px; font-weight: 600; letter-spacing: 0.3px;
+    cursor: pointer; padding: 4px 8px; border-radius: 8px; }
   .pairrow .forget:hover { color: #ECEAF3; color: var(--ink); background: rgba(255,255,255,0.08); }
   #scan { margin-top: 22px; }
   .scanor { color: #9095AD; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 2px;
@@ -600,23 +603,34 @@
     // Paired senders: list them and listen — when one starts a cast to us, its
     // offer appears under the pairing token and we connect, no code needed.
     var pairsEl = document.getElementById("pairs");
+    /* Known screens are not worth naming here. This page is usually a
+       television in a shared room, and printing "Rikard's MacBook Pro" on it
+       tells everyone present nothing they need and something they might not
+       want shared. All anyone needs to know is that the page is listening —
+       and a way to sever it. */
     function renderPairs() {
       var pairs = loadPairs();
       pairsEl.classList.toggle("hidden", pairs.length === 0);
-      pairsEl.innerHTML = pairs.length
-        ? '<p class="pairhead">Ready to receive from</p>' : "";
-      pairs.forEach(function (p) {
-        var row = document.createElement("div");
-        row.className = "pairrow";
-        var dot = document.createElement("span"); dot.className = "dot";
-        var name = document.createElement("span"); name.className = "name"; name.textContent = p.name;
-        var hint = document.createElement("span"); hint.className = "hint"; hint.textContent = "listening…";
-        var x = document.createElement("button"); x.className = "forget"; x.textContent = "×";
-        x.title = "Forget this device";
-        x.addEventListener("click", function () { forgetPair(p.id); renderPairs(); listenLanding(); });
-        row.appendChild(dot); row.appendChild(name); row.appendChild(hint); row.appendChild(x);
-        pairsEl.appendChild(row);
+      pairsEl.innerHTML = "";
+      if (!pairs.length) return;
+      var row = document.createElement("div");
+      row.className = "pairrow";
+      var dot = document.createElement("span"); dot.className = "dot";
+      var label = document.createElement("span"); label.className = "name";
+      label.textContent = "Listening…";
+      var count = document.createElement("span"); count.className = "hint";
+      count.textContent = pairs.length === 1 ? "1 known device" : pairs.length + " known devices";
+      var forget = document.createElement("button");
+      forget.className = "forget"; forget.type = "button";
+      forget.textContent = "Forget";
+      forget.title = "Forget every device paired with this screen";
+      forget.addEventListener("click", function () {
+        savePairs([]);
+        renderPairs();
+        listenLanding();
       });
+      row.appendChild(dot); row.appendChild(label); row.appendChild(count); row.appendChild(forget);
+      pairsEl.appendChild(row);
     }
     renderPairs();
 
