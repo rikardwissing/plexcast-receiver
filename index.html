@@ -55,7 +55,7 @@
      spacing and an unambiguous alphabet so it survives being read across a
      room; monospaced so every glyph occupies the same slot. */
   .screencode {
-    margin: 6px 0 22px;
+    margin: 10px 0 4px;
     font: 700 46px/1.1 ui-monospace, "SF Mono", Menlo, monospace;
     letter-spacing: 10px; text-indent: 10px;   /* indent balances the trailing gap */
     color: #F59E42; color: var(--accent);
@@ -125,11 +125,22 @@
   @media (min-width: 660px) and (orientation: landscape) {
     #entry { display: flex; align-items: center; text-align: center; max-width: 900px; }
     .entry-code { flex: 1 1 auto; padding-right: 40px; }
+    /* The divider IS the "or" here: a line, the word, a line — running down
+       the gap instead of a bare rule with the label hidden. */
     #scan.entry-col {
-      flex: 0 0 auto; padding-left: 40px;
-      border-left: 1px solid rgba(255,255,255,0.08);
+      position: relative;
+      flex: 0 0 auto; padding-left: 52px; border-left: 0;
     }
-    #scan .scanor { display: none; }        /* the divider says it now */
+    #scan .scanor {
+      display: flex; flex-direction: column; align-items: center;
+      position: absolute; left: 0; top: 0; bottom: 0; width: 42px;
+      margin: 0; font-size: 11px; letter-spacing: 2px;
+    }
+    #scan .scanor::before, #scan .scanor::after {
+      content: ""; position: static; width: 1px; height: auto;
+      flex: 1 1 auto; margin: 10px 0;
+      background: rgba(255,255,255,0.12);
+    }
   }
   /* Ten-foot read on a TV panel. */
   @media (min-width: 1280px) {
@@ -153,7 +164,10 @@
   #reconnect .rc-sub { margin-top: 6px; font-size: 14px; color: #9095AD; color: var(--muted); }
 
   /* Paired senders on the landing: we're listening for their casts. */
-  #pairs { margin: -8px 0 22px; text-align: left; }
+  /* Known screens are status, not an action — they sit under the code rather
+     than pushing it down the card. */
+  .codehint { margin: 0 0 18px; }
+  #pairs { margin: 4px 0 0; text-align: left; }
   #pairs .pairhead { font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
     color: #9095AD; color: var(--muted); font-weight: 700; margin: 0 0 8px; text-align: center; }
   .pairrow { display: flex; align-items: center; padding: 10px 14px;
@@ -277,9 +291,9 @@
       <img class="mark" src="icon.png" alt="">
       <p class="wordmark">Plex Downloader</p>
       <h1>Ready to cast</h1>
-      <p class="sub">Enter this code in Plex Downloader.</p>
-      <div id="pairs" class="hidden"></div>
       <p id="screencode" class="screencode">······</p>
+      <p class="sub codehint">Enter this code in Plex Downloader</p>
+      <div id="pairs" class="hidden"></div>
       <div id="signal-error" class="signal-error" role="status" aria-live="polite"></div>
       <button id="scanmore" class="linkbtn hidden">Show a QR code instead</button>
       </div>
