@@ -51,6 +51,17 @@
   h1 { font-size: 25px; font-weight: 700; letter-spacing: -0.3px; margin: 0 0 6px; }
   .sub { color: #9095AD; color: var(--muted); font-size: 15px; margin: 0 0 26px; }
 
+  /* The screen's own code — read from here, typed into the app. Wide letter
+     spacing and an unambiguous alphabet so it survives being read across a
+     room; monospaced so every glyph occupies the same slot. */
+  .screencode {
+    margin: 6px 0 22px;
+    font: 700 46px/1.1 ui-monospace, "SF Mono", Menlo, monospace;
+    letter-spacing: 10px; text-indent: 10px;   /* indent balances the trailing gap */
+    color: #F59E42; color: var(--accent);
+    -webkit-user-select: all; user-select: all;
+  }
+
   /* OTP-style code entry: four cells over one hidden input. */
   /* Explicit margins instead of flex `gap` (Chromium 84+) so the spacing
      survives on old TV engines. */
@@ -259,26 +270,23 @@
       <div id="status">Reaching the sender</div>
     </div>
 
-    <!-- Code-entry landing -->
+    <!-- This screen's code. Typing happens in the app, on a device with a
+         keyboard — a TV remote is the worst possible place to enter one. -->
     <div id="entry" class="card hidden">
       <div class="entry-col entry-code">
       <img class="mark" src="icon.png" alt="">
       <p class="wordmark">Plex Downloader</p>
-      <h1>Enter your code</h1>
-      <p class="sub">Type the 4-digit code shown in the app.</p>
+      <h1>Ready to cast</h1>
+      <p class="sub">Enter this code in Plex Downloader.</p>
       <div id="pairs" class="hidden"></div>
-      <div class="otp" id="otp">
-        <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
-        <input id="code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code" aria-label="Cast code">
-      </div>
-      <button id="go" class="btn" disabled>Watch</button>
+      <p id="screencode" class="screencode">······</p>
       <div id="signal-error" class="signal-error" role="status" aria-live="polite"></div>
-      <button id="scanmore" class="linkbtn hidden">Scan a code instead</button>
+      <button id="scanmore" class="linkbtn hidden">Show a QR code instead</button>
       </div>
       <div id="scan" class="entry-col hidden">
         <p class="scanor">or</p>
         <div id="qr" aria-label="Pairing QR code"></div>
-        <p class="sub scanhint">Scan with the Plex Downloader app (or your camera) to connect this screen — no typing.</p>
+        <p class="sub scanhint">Scan this with the Plex Downloader app to connect this screen — no typing at all.</p>
       </div>
     </div>
   </div>
@@ -554,46 +562,26 @@
   }
   function forgetPair(id) { savePairs(loadPairs().filter(function (p) { return p.id !== id; })); }
 
-  // No code in the link → show the landing form so a code can be typed straight
-  // on a TV. Four cells over one hidden input; auto-submits on the 4th digit.
+  // No code in the link → this screen mints its own and shows it. The user
+  // types it into the app, which is where a keyboard is; the page never asks
+  // anyone to type on a television.
   if (!room) {
     panel.classList.add("hidden");
     entry.classList.remove("hidden");
-    var input = document.getElementById("code");
-    var cells = Array.prototype.slice.call(document.querySelectorAll("#otp .cell"));
-    var go = document.getElementById("go");
     var submitted = false;
 
-    function render() {
-      var val = (input.value || "").replace(/\D/g, "").slice(0, 4);
-      if (val !== input.value) input.value = val;
-      var focused = document.activeElement === input;
-      cells.forEach(function (c, i) {
-        c.textContent = val[i] || "";
-        c.classList.toggle("filled", i < val.length);
-        c.classList.toggle("active", focused && i === val.length);
-      });
-      go.disabled = val.length !== 4;
-      if (val.length === 4) submitCode();
+    // Six characters from an alphabet with no 0/O, 1/I/L or U — a billion
+    // combinations, and nothing that can be misread from across a room.
+    function mintScreenCode() {
+      var alphabet = "23456789ABCDEFGHJKMNPQRSTVWXYZ", out = "";
+      var values = new Uint32Array(6);
+      try { crypto.getRandomValues(values); }
+      catch (e) { for (var j = 0; j < 6; j++) values[j] = Math.floor(Math.random() * 0xFFFFFFFF); }
+      for (var i = 0; i < 6; i++) out += alphabet.charAt(values[i] % alphabet.length);
+      return out;
     }
-    function submitCode() {
-      var val = (input.value || "").trim();
-      if (val.length < 4 || submitted) return;
-      submitted = true;
-      closeLandingSignals();
-      room = val;
-      activeSignal = new SignalSocket(room, null, activeSignalState);
-      showPanel();
-      setStatus("Connecting…", "Reaching the sender");
-      start(1);   // same self-healing handshake as a deep link
-    }
-    input.addEventListener("input", render);
-    input.addEventListener("focus", render);
-    input.addEventListener("blur", render);
-    go.addEventListener("click", submitCode);
-    document.getElementById("otp").addEventListener("click", function () { try { input.focus(); } catch (e) {} });
-    try { input.focus(); } catch (e) {}
-    render();
+    var screenCode = mintScreenCode();
+    document.getElementById("screencode").textContent = screenCode;
 
     // Paired senders: list them and listen — when one starts a cast to us, its
     // offer appears under the pairing token and we connect, no code needed.
@@ -621,17 +609,17 @@
     // Reverse pairing: mint a rendezvous code and show it as a QR. The phone
     // scans it (in-app, or the system camera opens the deep link) and casts to
     // this screen — no code typed here. We listen on this room like a pairing token.
-    var scanRoom = "";
+    // The QR is the same code, scanned instead of typed.
+    var scanRoom = screenCode;
     (function setupScanQR() {
-      if (typeof qrcode !== "function") return;   // lib offline → code entry still works
-      scanRoom = "s" + Math.random().toString(36).slice(2, 10);
+      if (typeof qrcode !== "function") return;   // lib offline → the code still works
       try {
         var qr = qrcode(0, "M");
         qr.addData("plexdownloader://pair?r=" + scanRoom);
         qr.make();
         document.getElementById("qr").innerHTML = qr.createImgTag(5, 0);
         document.getElementById("scan").classList.remove("hidden");
-      } catch (e) { scanRoom = ""; }
+      } catch (e) { document.getElementById("scan").classList.add("hidden"); }
     })();
 
     // Phones collapse the QR (see the CSS note); one tap brings it back.
