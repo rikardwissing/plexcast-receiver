@@ -212,15 +212,21 @@
     .cell + .cell { margin-left: 10px; }
     .otp { margin: 2px 0 18px; }
     .btn { height: 50px; font-size: 16px; }
-    #scan { margin-top: 16px; }
-    #scan .scanor { margin: 16px 0 14px; }
-    #qr { width: 168px; height: 168px; padding: 10px; }
+    /* The QR view has to fit a short phone screen without scrolling: the code
+       view is shorter, so this is the size that decides the card. */
+    #scan { margin-top: 8px; }
+    #scan .scanor { margin: 14px 0 12px; }
+    #qr { width: 148px; height: 148px; padding: 9px; margin-bottom: 12px; }
     .scanhint { font-size: 13px; max-width: 252px; margin-bottom: 0; }
     /* A QR is for a camera pointed at ANOTHER screen — on a phone it is the
        rare path, and at 180px tall it crowded out the code entry. Collapsed
        behind one line of text, revealed on demand. */
+    /* One at a time on a phone: the code, or the QR that encodes it. */
     #scan { display: none; }
-    #scan.revealed { display: block; }
+    #entry.showing-qr #scan { display: block; }
+    #entry.showing-qr .screencode,
+    #entry.showing-qr .codehint,
+    #entry.showing-qr .scanor { display: none; }   /* "or" needs two things */
     #scanmore { display: block; }
     .sub { margin-bottom: 20px; }
     .mark { width: 50px; height: 50px; margin-bottom: 12px; }
@@ -304,13 +310,15 @@
       <p class="sub codehint">Enter this code in Plex Downloader</p>
       <div id="pairs" class="hidden"></div>
       <div id="signal-error" class="signal-error" role="status" aria-live="polite"></div>
-      <button id="scanmore" class="linkbtn hidden">Show a QR code instead</button>
       </div>
       <div id="scan" class="entry-col hidden">
         <p class="scanor">or</p>
         <div id="qr" aria-label="Pairing QR code"></div>
         <p class="sub scanhint">Scan this with the Plex Downloader app to connect this screen — no typing at all.</p>
       </div>
+      <!-- Sits after both faces so the action is always under what it swaps,
+           never floating above it. Phones only: the wide layout shows both. -->
+      <button id="scanmore" class="linkbtn hidden">Show a QR code instead</button>
     </div>
   </div>
 
@@ -656,14 +664,16 @@
       } catch (e) { document.getElementById("scan").classList.add("hidden"); }
     })();
 
-    // Phones collapse the QR (see the CSS note); one tap brings it back.
+    /* On a phone the card shows one thing at a time and this swaps between
+       them — "instead" has to mean instead. Both are the same code, so seeing
+       them together is just clutter, and there was no way back. */
     (function () {
       var more = document.getElementById("scanmore");
       if (!more || !scanRoom) return;
       more.classList.remove("hidden");
       more.addEventListener("click", function () {
-        document.getElementById("scan").classList.add("revealed");
-        more.style.display = "none";
+        var showingQR = entry.classList.toggle("showing-qr");
+        more.textContent = showingQR ? "Show the code instead" : "Show a QR code instead";
       });
     })();
 
