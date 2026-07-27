@@ -300,13 +300,21 @@
       </div>
     </div>
 
-    <!-- Connecting / status -->
+    <!-- Connecting / status. This text is the PRE-SCRIPT state: nothing has been
+         reached yet, and on a bare visit the script replaces this card with the
+         code screen within a beat. It used to read "Connecting… / Reaching the
+         sender" — a claim that was false until something actually connected, and
+         actively misleading when the script never ran at all (a parse error on an
+         old TV engine): the card sat there looking like a live attempt, which is
+         indistinguishable from a hung connection. Say only what is true before
+         any code runs. Every real state overwrites it, and the boot reporter
+         above replaces it with the actual error. -->
     <div id="panel" class="card">
       <img class="mark" src="icon.png" alt="">
       <p class="wordmark">Portage</p>
       <div class="spinner"></div>
-      <h1>Connecting…</h1>
-      <div id="status">Reaching the sender</div>
+      <h1 id="boot-title">Starting…</h1>
+      <div id="status">Getting the receiver ready</div>
     </div>
 
     <!-- This screen's code. Typing happens in the app, on a device with a
@@ -335,6 +343,60 @@
     </div>
   </div>
 
+<!-- Boot error reporter. FIRST script on the page, deliberately tiny and plain
+     ES5, because it is the only thing still running when a later script fails
+     to PARSE — one ES2015+ token is fatal on a 2017 TV, and a parse error kills
+     that whole script before any of its own error handling exists. Without this
+     the receiver sits on its start-up card forever and the only way to find out
+     why is a console the TV does not give you. Reports until the main script
+     finishes initialising (PLEXCAST_BOOTED); after that the receiver's own
+     error handling owns the screen, so a stray late error can't wipe playback. -->
+<script>
+(function () {
+  var missing = [], reported = false;
+  function report(headline, detail) {
+    if (window.PLEXCAST_BOOTED) return;   // booted — not ours to draw over
+    reported = true;
+    try {
+      window.PLEXCAST_BOOT_ERROR = headline + ": " + detail;   // observable for QA
+      var title = document.getElementById("boot-title");
+      var status = document.getElementById("status");
+      var spinner = document.querySelector("#panel .spinner");
+      if (title) title.textContent = headline;
+      if (status) status.textContent = String(detail).slice(0, 300);
+      if (spinner) spinner.style.display = "none";
+    } catch (e) {}
+  }
+  // Capture phase: a file that 404s fires a non-bubbling error AT its element.
+  window.addEventListener("error", function (e) {
+    var el = e && e.target;
+    if (el && el !== window && (el.src || el.href)) {
+      // A file that didn't load is NOT necessarily fatal — the icon is
+      // decoration, and hls.js and the QR library are both optional (the page
+      // guards for their absence). Remember it; the watchdog below names it
+      // only if start-up never actually completes.
+      missing.push(String(el.src || el.href).split("/").pop());
+      return;
+    }
+    var where = e && e.filename
+      ? " (" + String(e.filename).split("/").pop() + ":" + (e.lineno || 0) + ")" : "";
+    report("The receiver hit an error", ((e && e.message) || "script error") + where);
+  }, true);
+  window.onunhandledrejection = function (e) {
+    report("The receiver hit an error", "unhandled: " + ((e && e.reason) || "?"));
+  };
+  // Nothing above fires for a script that merely never finishes, so the last
+  // resort is a watchdog: if initialisation hasn't completed, say that plainly
+  // instead of spinning forever. Start-up does no network work of its own, so
+  // reaching this means something is genuinely wrong.
+  setTimeout(function () {
+    if (reported) return;   // a specific error already named the cause — keep it
+    report("The receiver didn’t start",
+           missing.length ? "couldn’t load " + missing.join(", ")
+                          : "the page loaded but its script did not run");
+  }, 8000);
+})();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <!-- mp4box.js: demuxes a multi-audio direct MP4 so the MSE engine can switch
@@ -352,7 +414,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 8;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 9;   // bump when debugging cached-page confusion
   /* ES5 query parsing on purpose: URLSearchParams is Chrome 49+ and this is
      the first executable line on a 2017 TV — a TypeError here would blank the
      whole receiver. */
@@ -1619,7 +1681,16 @@
   }
 
   function start(attempt) {
-    connect().catch(function (e) {
+    // connect() does real work — constructing the peer, reading its
+    // capabilities — BEFORE it returns a promise, and on an old engine any of
+    // that can throw SYNCHRONOUSLY. Calling .catch() straight off the call
+    // meant such a throw escaped before a handler was ever attached: nothing
+    // reported it, fail() never ran, and the card sat on its start-up text
+    // looking like a connection that was merely slow. Normalise to a promise so
+    // every failure, sync or async, lands on the same "Can't connect".
+    var attempted;
+    try { attempted = connect(); } catch (e) { attempted = Promise.reject(e); }
+    attempted.catch(function (e) {
       if (e && e.retry && attempt < 4) {
         setStatus("Connecting…", "Trying again…");
         start(attempt + 1);
@@ -1631,6 +1702,10 @@
   // A deep link (#code / ?room=) connects straight away; a landing session
   // (typed code or paired listen) starts itself once it has a room.
   if (room) start(1);
+  // Initialisation finished. From here the receiver's own error handling owns
+  // the screen, so the boot reporter stands down (see the top of the page) —
+  // otherwise a stray late error would wipe out live playback with an error card.
+  window.PLEXCAST_BOOTED = true;
 })();
 </script>
 </body>
