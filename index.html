@@ -678,14 +678,14 @@
 
     // Six characters from an alphabet with no 0/O, 1/I/L or U — a billion
     // combinations, and nothing that can be misread from across a room.
-    function mintScreenCode() {
+    var mintScreenCode = function() {
       var alphabet = "23456789ABCDEFGHJKMNPQRSTVWXYZ", out = "";
       var values = new Uint32Array(6);
       try { crypto.getRandomValues(values); }
       catch (e) { for (var j = 0; j < 6; j++) values[j] = Math.floor(Math.random() * 0xFFFFFFFF); }
       for (var i = 0; i < 6; i++) out += alphabet.charAt(values[i] % alphabet.length);
       return out;
-    }
+    };
     var screenCode = mintScreenCode();
     document.getElementById("screencode").textContent = screenCode;
 
@@ -697,7 +697,7 @@
        tells everyone present nothing they need and something they might not
        want shared. All anyone needs to know is that the page is listening —
        and a way to sever it. */
-    function renderPairs() {
+    var renderPairs = function() {
       var pairs = loadPairs();
       pairsEl.classList.toggle("hidden", pairs.length === 0);
       pairsEl.innerHTML = "";
@@ -727,7 +727,7 @@
       row.appendChild(dot); row.appendChild(label); row.appendChild(sep());
       row.appendChild(count); row.appendChild(sep()); row.appendChild(forget);
       pairsEl.appendChild(row);
-    }
+    };
     renderPairs();
 
     // Reverse pairing: mint a rendezvous code and show it as a QR. The phone
@@ -759,7 +759,7 @@
       });
     })();
 
-    function acceptLandingOffer(offer, socket, target) {
+    var acceptLandingOffer = function(offer, socket, target) {
       if (submitted) return;
       trace("signal: offer pushed to landing");
       submitted = true;
@@ -769,9 +769,9 @@
       showPanel();
       setStatus("Connecting…", "Answering " + target.name);
       start(1);
-    }
+    };
 
-    function listenLanding() {
+    var listenLanding = function() {
       closeLandingSignals();
       signalErrorEl.textContent = "";
       var targets = loadPairs().slice();
@@ -782,7 +782,7 @@
         }, activeSignalState);
         landingSignals[target.id] = socket;
       });
-    }
+    };
 
     // After a cast ends, come back here and restore the persistent listeners.
     resumeListening = function () {
