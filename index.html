@@ -414,7 +414,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 11;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 12;   // bump when debugging cached-page confusion
   /* ES5 query parsing on purpose: URLSearchParams is Chrome 49+ and this is
      the first executable line on a 2017 TV — a TypeError here would blank the
      whole receiver. */
@@ -1619,6 +1619,10 @@
 
   function connect() {
     disconnecting = false;   // fresh attempt — arm the drop handler again
+    // Filled in as the handshake proceeds so a failure can describe itself on
+    // screen (see handshakeSummary, assigned once the peer exists).
+    var remoteCandidates = 0;
+    var handshakeSummary = function () { return "never started"; };
     if (!PeerCtor) {
       fail("This browser has no WebRTC support.");
       return Promise.reject(new Error("no RTCPeerConnection"));
@@ -1653,9 +1657,31 @@
       dc.onclose = function () { handleDrop(); };
     };
     window.PAGEPC = pc;   // QA observable
+    /* A television has no console, so when the handshake fails the page has to
+       be able to SAY where it stopped. These three facts separate the causes
+       that otherwise all look like "it just doesn't connect": no candidates of
+       our own means the engine never gathered; none from the sender means its
+       offer arrived empty; and the ICE state we reached distinguishes "never
+       paired" (new) from "paired but no path" (checking) from "path found, so a
+       failure after this is DTLS or the data channel" (connected). */
+    var iceSeen = [], myCandidates = {};
+    pc.onicecandidate = function (e) {
+      if (!e || !e.candidate) return;
+      var found = /(?:^| )typ (\w+)/.exec(e.candidate.candidate || "");
+      var kind = found ? found[1] : "?";
+      myCandidates[kind] = (myCandidates[kind] || 0) + 1;
+    };
+    handshakeSummary = function () {
+      var mine = [], kind;
+      for (kind in myCandidates) mine.push(kind + " " + myCandidates[kind]);
+      return "ice " + (iceSeen.join("→") || pc.iceConnectionState || "none") +
+             " · mine " + (mine.join(", ") || "none") +
+             " · theirs " + remoteCandidates;
+    };
     window.PLEXCAST_ICE_LOG = window.PLEXCAST_ICE_LOG || [];
     pc.oniceconnectionstatechange = function () {
       window.PLEXCAST_ICE_LOG.push(nowMs() % 100000 + " ice:" + pc.iceConnectionState);
+      if (iceSeen[iceSeen.length - 1] !== pc.iceConnectionState) iceSeen.push(pc.iceConnectionState);
       trace("ice " + pc.iceConnectionState);
     };
     // connectionState is Chrome 72+; on older engines this never fires and a
@@ -1679,6 +1705,10 @@
       // Strip attributes an old parser cannot read BEFORE the first attempt, so
       // the DTLS/SCTP retry below inherits a description that at least parses.
       parsed.sdp = sdpForOldParsers(parsed.sdp);
+      // The offer is non-trickle, so the sender's candidates ride inside it.
+      // Zero here means there is nothing to connect TO, which is a sender-side
+      // fault and worth telling apart from our own gathering failing.
+      remoteCandidates = (String(parsed.sdp).match(/^a=candidate:/gm) || []).length;
       return sdpCall(pc, "setRemoteDescription", describe(parsed)).catch(function (e) {
         var rewritten = legacySdp(parsed.sdp);
         if (rewritten === parsed.sdp) throw e;
@@ -1710,12 +1740,30 @@
       return wait(12000);
     }).then(function () {
       if (!wasConnected) {
-        trace("retry: answer sent but ICE never connected");
+        var why = handshakeSummary();
+        trace("retry: answer sent but ICE never connected — " + why);
         try { pc.close(); } catch (x) {}
         dc = null;
-        throw { retry: true };
+        throw { retry: true, why: why };
       }
     });
+  }
+
+  /* "[object Object]" is all String() can make of the {retry:true} sentinel, and
+     that is exactly what the screen showed after four attempts — a dead end for
+     anyone trying to work out what went wrong. Prefer the handshake summary the
+     sentinel now carries, then a real Error's message, and never fall through to
+     a bare object again. */
+  function describeFailure(e) {
+    if (!e) return "unknown error";
+    if (typeof e === "string") return e;
+    if (e.why) return "the connection never opened — " + e.why;
+    if (e.message) return String(e.message);
+    try {
+      var text = JSON.stringify(e);
+      if (text && text !== "{}") return text;
+    } catch (x) {}
+    return String(e);
   }
 
   function start(attempt) {
@@ -1733,7 +1781,7 @@
         setStatus("Connecting…", "Trying again…");
         start(attempt + 1);
       } else {
-        fail(String(e && e.message || e));
+        fail(describeFailure(e));
       }
     });
   }
