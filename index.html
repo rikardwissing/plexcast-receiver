@@ -414,7 +414,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 12;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 13;   // bump when debugging cached-page confusion
   /* ES5 query parsing on purpose: URLSearchParams is Chrome 49+ and this is
      the first executable line on a 2017 TV — a TypeError here would blank the
      whole receiver. */
@@ -1599,6 +1599,31 @@
      and no RTP ever flows. Dropping it costs a modern engine nothing, so it is
      removed unconditionally rather than as a fallback — a fallback would be
      dead code, since the failure it guards against kills the parse outright. */
+  /* A server-reflexive candidate carries the address the far side of the NAT
+     sees — the device's public IP. Comparing ours against the sender's settles
+     the question that changes the diagnosis completely. The SAME public IP means
+     both devices sit behind one router, so a host-to-host path exists and a
+     failure means the router refuses to bridge its own clients (AP / client
+     isolation, usual on guest networks). DIFFERENT public IPs means a real NAT
+     traversal, which STUN alone cannot always achieve — a phone on cellular is
+     the classic case, and the fix there is a TURN relay, not anything on this
+     page. Without this the two look identical from the TV: "ice checking". */
+  function publicAddressOf(candidateLine) {
+    // candidate:<foundation> <component> <transport> <priority> <address> <port> typ <type>
+    var text = String(candidateLine).replace(/^a=/, "");
+    var parts = /^candidate:\S+ \d+ \S+ \d+ (\S+) \d+ typ (\w+)/.exec(text);
+    if (!parts) return null;
+    if (parts[2] !== "srflx" && parts[2] !== "relay") return null;   // host = LAN, tells us nothing
+    return parts[1];
+  }
+  function sameNetworkVerdict(mine, theirs) {
+    var ours = [], them = [], key;
+    for (key in mine) ours.push(key);
+    for (key in theirs) them.push(key);
+    if (!ours.length || !them.length) return "net ?";
+    for (var i = 0; i < ours.length; i++) if (theirs[ours[i]]) return "net same (" + ours[i] + ")";
+    return "net different (" + ours[0] + " vs " + them[0] + ")";
+  }
   function sdpForOldParsers(sdp) {
     return String(sdp).replace(/^a=extmap-allow-mixed[^\r\n]*\r?\n?/gm, "");
   }
@@ -1621,7 +1646,8 @@
     disconnecting = false;   // fresh attempt — arm the drop handler again
     // Filled in as the handshake proceeds so a failure can describe itself on
     // screen (see handshakeSummary, assigned once the peer exists).
-    var remoteCandidates = 0;
+    var remoteCandidates = 0, sentCandidates = -1;
+    var myPublic = {}, theirPublic = {};
     var handshakeSummary = function () { return "never started"; };
     if (!PeerCtor) {
       fail("This browser has no WebRTC support.");
@@ -1667,16 +1693,21 @@
     var iceSeen = [], myCandidates = {};
     pc.onicecandidate = function (e) {
       if (!e || !e.candidate) return;
-      var found = /(?:^| )typ (\w+)/.exec(e.candidate.candidate || "");
+      var line = e.candidate.candidate || "";
+      var found = /(?:^| )typ (\w+)/.exec(line);
       var kind = found ? found[1] : "?";
       myCandidates[kind] = (myCandidates[kind] || 0) + 1;
+      var address = publicAddressOf(line);
+      if (address) myPublic[address] = true;
     };
     handshakeSummary = function () {
       var mine = [], kind;
       for (kind in myCandidates) mine.push(kind + " " + myCandidates[kind]);
       return "ice " + (iceSeen.join("→") || pc.iceConnectionState || "none") +
              " · mine " + (mine.join(", ") || "none") +
-             " · theirs " + remoteCandidates;
+             " · sent " + (sentCandidates < 0 ? "?" : sentCandidates) +
+             " · theirs " + remoteCandidates +
+             " · " + sameNetworkVerdict(myPublic, theirPublic);
     };
     window.PLEXCAST_ICE_LOG = window.PLEXCAST_ICE_LOG || [];
     pc.oniceconnectionstatechange = function () {
@@ -1708,7 +1739,12 @@
       // The offer is non-trickle, so the sender's candidates ride inside it.
       // Zero here means there is nothing to connect TO, which is a sender-side
       // fault and worth telling apart from our own gathering failing.
-      remoteCandidates = (String(parsed.sdp).match(/^a=candidate:/gm) || []).length;
+      var theirLines = String(parsed.sdp).match(/^a=candidate:[^\r\n]*/gm) || [];
+      remoteCandidates = theirLines.length;
+      theirLines.forEach(function (line) {
+        var address = publicAddressOf(line);
+        if (address) theirPublic[address] = true;
+      });
       return sdpCall(pc, "setRemoteDescription", describe(parsed)).catch(function (e) {
         var rewritten = legacySdp(parsed.sdp);
         if (rewritten === parsed.sdp) throw e;
@@ -1730,6 +1766,11 @@
       });
     }).then(function () {
       setStatus("Connecting…", "Handing back the answer");
+      // What the sender actually receives. Gathering is capped at 4s above, so
+      // a slow engine can post an answer carrying fewer candidates than it
+      // eventually finds — counting at failure time would hide that.
+      var localSdp = (pc.localDescription && pc.localDescription.sdp) || "";
+      sentCandidates = (localSdp.match(/^a=candidate:/gm) || []).length;
       return postAnswer(encode(pc.localDescription), signalOffer.generation);
     }).then(function () {
       trace("answer posted for room " + room.slice(0, 8));
