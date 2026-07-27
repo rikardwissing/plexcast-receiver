@@ -123,7 +123,10 @@
     background: none; border: 0; cursor: pointer;
     font-size: 14px; font-weight: 600; color: #F59E42; color: var(--accent); }
   @media (min-width: 660px) and (orientation: landscape) {
-    #entry { display: flex; align-items: center; text-align: center; max-width: 900px; }
+    /* wrap so the status footer drops below both columns instead of becoming
+       a third one beside the QR. */
+    #entry { display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap;
+      -webkit-align-items: center; align-items: center; text-align: center; max-width: 900px; }
     /* Equal air either side of the line. The divider box begins at #scan's
        left edge and centres its rule, so the right column has to clear a
        further half-box: padding-left = padding-right + box width. */
@@ -170,7 +173,10 @@
   /* Known screens are status, not an action — they sit under the code rather
      than pushing it down the card. */
   .codehint { margin: 0 0 18px; }
-  #pairs { margin: 4px 0 0; text-align: left; }
+  /* Full-width footer of the card, below the code column AND the scan column
+     (the wide layout wraps it onto its own line). */
+  #pairs, .signal-error { -webkit-flex-basis: 100%; flex-basis: 100%; width: 100%; }
+  #pairs { margin: 14px 0 0; text-align: left; }
   .pairrow { display: flex; align-items: center; padding: 10px 14px;
     border-radius: 14px; background: rgba(255,255,255,0.045);
     border: 1px solid rgba(255,255,255,0.08); margin-bottom: 8px; }
@@ -308,14 +314,17 @@
       <h1>Ready to cast</h1>
       <p id="screencode" class="screencode">······</p>
       <p class="sub codehint">Enter this code in Plex Downloader</p>
-      <div id="pairs" class="hidden"></div>
-      <div id="signal-error" class="signal-error" role="status" aria-live="polite"></div>
       </div>
       <div id="scan" class="entry-col hidden">
         <p class="scanor">or</p>
         <div id="qr" aria-label="Pairing QR code"></div>
         <p class="sub scanhint">Scan this with the Plex Downloader app to connect this screen — no typing at all.</p>
       </div>
+      <!-- Status, not part of either face: it belongs UNDER whichever one is
+           showing. Inside the code column it ended up above the QR whenever
+           the phone swapped faces. -->
+      <div id="pairs" class="hidden"></div>
+      <div id="signal-error" class="signal-error" role="status" aria-live="polite"></div>
       <!-- Sits after both faces so the action is always under what it swaps,
            never floating above it. Phones only: the wide layout shows both. -->
       <button id="scanmore" class="linkbtn hidden">Show a QR code instead</button>
