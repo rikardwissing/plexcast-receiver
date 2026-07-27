@@ -170,29 +170,33 @@
   #reconnect .rc-sub { margin-top: 6px; font-size: 14px; color: #9095AD; color: var(--muted); }
 
   /* Paired senders on the landing: we're listening for their casts. */
-  /* Known screens are status, not an action — they sit under the code rather
-     than pushing it down the card. */
+  /* This is status, and status the user has already been told once: a screen
+     they paired is a screen that stays paired. It gets one quiet line under
+     the card's business — no panel, no border, nothing that competes with the
+     code or the QR for attention. */
   .codehint { margin: 0 0 18px; }
   /* Full-width footer of the card, below the code column AND the scan column
      (the wide layout wraps it onto its own line). */
   #pairs, .signal-error { -webkit-flex-basis: 100%; flex-basis: 100%; width: 100%; }
-  #pairs { margin: 14px 0 0; text-align: left; }
-  .pairrow { display: flex; align-items: center; padding: 10px 14px;
-    border-radius: 14px; background: rgba(255,255,255,0.045);
-    border: 1px solid rgba(255,255,255,0.08); margin-bottom: 8px; }
-  .pairrow > * + * { margin-left: 10px; }
-  .pairrow .dot { width: 8px; height: 8px; border-radius: 50%; background: #F59E42; background: var(--accent);
-    animation: pulse 1.6s ease-in-out infinite; flex: none; }
-  @keyframes pulse { 50% { opacity: 0.25; } }
-  .pairrow .name { flex: 1; font-size: 15px; font-weight: 600; min-width: 0;
+  #pairs { margin: 18px 0 0; }
+  .pairrow { display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center;
+    -webkit-justify-content: center; justify-content: center;
+    font-size: 12px; color: #9095AD; color: var(--muted); }
+  .pairrow > * + * { margin-left: 7px; }
+  .pairrow .dot { width: 5px; height: 5px; border-radius: 50%; background: #F59E42; background: var(--accent);
+    opacity: 0.85; animation: pulse 1.6s ease-in-out infinite; flex: none; }
+  @keyframes pulse { 50% { opacity: 0.2; } }
+  .pairrow .name { font-weight: 500; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pairrow .hint { color: #9095AD; color: var(--muted); font-size: 12px; flex: none; }
-  /* A word now, not an ×: it forgets every paired device, which is too much
-     to hang off a glyph. */
-  .pairrow .forget { flex: none; border: 0; background: transparent; color: #9095AD; color: var(--muted);
-    font-size: 12px; font-weight: 600; letter-spacing: 0.3px;
-    cursor: pointer; padding: 4px 8px; border-radius: 8px; }
-  .pairrow .forget:hover { color: #ECEAF3; color: var(--ink); background: rgba(255,255,255,0.08); }
+  .pairrow .hint { opacity: 0.7; }
+  .pairrow .sep { opacity: 0.4; }
+  /* A word rather than an ×: it forgets every paired device, which is too
+     much to hang off a glyph. Kept at the line's weight so it reads as part
+     of the sentence until you go looking for it. */
+  .pairrow .forget { flex: none; border: 0; background: transparent; padding: 0;
+    color: #9095AD; color: var(--muted); font: inherit; text-decoration: underline;
+    text-underline-offset: 2px; opacity: 0.75; cursor: pointer; }
+  .pairrow .forget:hover { color: #ECEAF3; color: var(--ink); opacity: 1; }
   #scan { margin-top: 22px; }
   .scanor { color: #9095AD; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 2px;
     margin: 0 0 16px; position: relative; }
@@ -236,7 +240,7 @@
     #scanmore { display: block; }
     .sub { margin-bottom: 20px; }
     .mark { width: 50px; height: 50px; margin-bottom: 12px; }
-    .pairrow { padding: 9px 12px; }
+    #pairs { margin-top: 14px; }
   }
 
   /* Landscape phones: two columns already, but the card ran off a 390px-tall
@@ -652,7 +656,14 @@
         renderPairs();
         listenLanding();
       });
-      row.appendChild(dot); row.appendChild(label); row.appendChild(count); row.appendChild(forget);
+      // Middots between the facts, so the line reads as one sentence rather
+      // than three things that happen to be adjacent.
+      function sep() {
+        var el = document.createElement("span"); el.className = "sep";
+        el.textContent = "·"; return el;
+      }
+      row.appendChild(dot); row.appendChild(label); row.appendChild(sep());
+      row.appendChild(count); row.appendChild(sep()); row.appendChild(forget);
       pairsEl.appendChild(row);
     }
     renderPairs();
