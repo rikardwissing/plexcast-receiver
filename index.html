@@ -414,7 +414,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 10;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 11;   // bump when debugging cached-page confusion
   /* ES5 query parsing on purpose: URLSearchParams is Chrome 49+ and this is
      the first executable line on a 2017 TV — a TypeError here would blank the
      whole receiver. */
@@ -1538,26 +1538,48 @@
     }
     return { iceServers: servers };
   }
-  /* Try the modern promise form FIRST and only fall back to the callback form
-     when the engine refuses it. Passing callbacks *and* wiring the returned
-     promise looks tolerant but is a bug: a browser that supports both invokes
-     the callback AND resolves the promise — with undefined — so the two race,
-     and createAnswer can hand setLocalDescription an undefined description
-     ("Failed to parse SessionDescription"). Chromium 38 has no promise form and
-     throws TypeError for the missing callbacks, which selects the legacy path. */
+  /* Call an SDP method across engines that disagree about promises vs callbacks.
+     Two rules, each learned the hard way:
+
+     1. NEVER pass callbacks and also wire the returned promise. An engine that
+        supports both invokes the callback AND resolves the promise — with
+        undefined — so the two race and createAnswer can hand setLocalDescription
+        an undefined description ("Failed to parse SessionDescription").
+
+     2. NEVER re-invoke a call that may have already run. The previous version
+        always tried the promise form first and treated "no promise back" as
+        proof the engine had refused, then called again with callbacks. That
+        holds only if the engine THROWS on the missing callbacks. A 2017 webOS
+        engine instead accepts setLocalDescription(desc), performs it, and
+        returns undefined — so the second call applied the same description
+        again and the state machine rejected it: "Failed to set local answer
+        sdp: Called in wrong state: STATE_SENTACCEPT".
+
+     So: pick the form up front from what the engine exposes, and only ever fall
+     back after a THROW (which proves nothing happened) or for the two methods
+     that are safe to repeat because they change no state. */
+  var LEGACY_SDP_API = !window.RTCPeerConnection &&
+                       !!(window.webkitRTCPeerConnection || window.mozRTCPeerConnection);
+  // createOffer/createAnswer only compute a description; running one twice is
+  // harmless. setLocal/setRemoteDescription APPLY one — repeating them is the
+  // bug above, so they are never retried once a call has been made.
+  var REPEATABLE_SDP = { createOffer: true, createAnswer: true };
   function sdpCall(pc, method, arg) {
     return new Promise(function (resolve, reject) {
-      var out = null, modern = false;
-      try {
-        out = (arg === null || arg === undefined) ? pc[method]() : pc[method](arg);
-        modern = !!(out && typeof out.then === "function");
-      } catch (e) { modern = false; }
-      if (modern) { out.then(resolve, reject); return; }
       var settled = false;
       function ok(x) { if (!settled) { settled = true; resolve(x); } }
       function bad(e) { if (!settled) { settled = true; reject(e); } }
-      try { (arg === null || arg === undefined) ? pc[method](ok, bad) : pc[method](arg, ok, bad); }
-      catch (e2) { bad(e2); }
+      function withCallbacks() {
+        try { (arg === null || arg === undefined) ? pc[method](ok, bad) : pc[method](arg, ok, bad); }
+        catch (e) { bad(e); }
+      }
+      if (LEGACY_SDP_API) { withCallbacks(); return; }
+      var out;
+      try { out = (arg === null || arg === undefined) ? pc[method]() : pc[method](arg); }
+      catch (e) { withCallbacks(); return; }   // threw ⇒ it did not run ⇒ safe to retry
+      if (out && typeof out.then === "function") { out.then(ok, bad); return; }
+      if (REPEATABLE_SDP[method]) { withCallbacks(); return; }   // no state to corrupt
+      ok(out);   // applied, and gave us no promise to await — do NOT run it again
     });
   }
   function decode(blob) { return JSON.parse(atob(blob)); }
