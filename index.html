@@ -414,7 +414,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 9;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 10;   // bump when debugging cached-page confusion
   /* ES5 query parsing on purpose: URLSearchParams is Chrome 49+ and this is
      the first executable line on a 2017 TV — a TypeError here would blank the
      whole receiver. */
@@ -1567,6 +1567,19 @@
     try { return new DescCtor({ type: offer.type || "offer", sdp: offer.sdp }); }
     catch (e) { return offer; }
   }
+  /* libwebrtc advertises `a=extmap-allow-mixed` (RFC 8285, ~2018) at session
+     level. A 2014-era parser matches the "extmap" prefix, expects the
+     "a=extmap:<id> <uri>" shape, finds a single field and rejects the WHOLE
+     description — "Failed to parse SessionDescription … Expects at least 2
+     fields" — so the offer never even reaches the DTLS/SCTP retry below. The
+     attribute only advertises willingness to mix one- and two-byte RTP header
+     extensions, which is meaningless here: the only m-line is a data channel
+     and no RTP ever flows. Dropping it costs a modern engine nothing, so it is
+     removed unconditionally rather than as a fallback — a fallback would be
+     dead code, since the failure it guards against kills the parse outright. */
+  function sdpForOldParsers(sdp) {
+    return String(sdp).replace(/^a=extmap-allow-mixed[^\r\n]*\r?\n?/gm, "");
+  }
   /* An engine from the Chromium 38 era only parses the 2013 data-channel m-line
      ("DTLS/SCTP <port>" + a=sctpmap); libwebrtc offers the modern
      "UDP/DTLS/SCTP webrtc-datachannel" + a=sctp-port. Used only as a retry when
@@ -1641,6 +1654,9 @@
       signalOffer = offer;
       trace("getOffer ok len=" + offer.sdp.length);
       var parsed = decode(offer.sdp);
+      // Strip attributes an old parser cannot read BEFORE the first attempt, so
+      // the DTLS/SCTP retry below inherits a description that at least parses.
+      parsed.sdp = sdpForOldParsers(parsed.sdp);
       return sdpCall(pc, "setRemoteDescription", describe(parsed)).catch(function (e) {
         var rewritten = legacySdp(parsed.sdp);
         if (rewritten === parsed.sdp) throw e;
