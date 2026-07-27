@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="icon" type="image/png" href="icon.png">
-  <title>Plex Downloader</title>
+  <title>Portage</title>
 <style>
   :root {
     color-scheme: dark;
@@ -303,7 +303,7 @@
     <!-- Connecting / status -->
     <div id="panel" class="card">
       <img class="mark" src="icon.png" alt="">
-      <p class="wordmark">Plex Downloader</p>
+      <p class="wordmark">Portage</p>
       <div class="spinner"></div>
       <h1>Connecting…</h1>
       <div id="status">Reaching the sender</div>
@@ -314,15 +314,15 @@
     <div id="entry" class="card hidden">
       <div class="entry-col entry-code">
       <img class="mark" src="icon.png" alt="">
-      <p class="wordmark">Plex Downloader</p>
+      <p class="wordmark">Portage</p>
       <h1>Ready to cast</h1>
       <p id="screencode" class="screencode">······</p>
-      <p class="sub codehint">Enter this code in Plex Downloader</p>
+      <p class="sub codehint">Enter this code in Portage</p>
       </div>
       <div id="scan" class="entry-col hidden">
         <p class="scanor">or</p>
         <div id="qr" aria-label="Pairing QR code"></div>
-        <p class="sub scanhint">Scan this with the Plex Downloader app to connect this screen — no typing at all.</p>
+        <p class="sub scanhint">Scan this with the Portage app to connect this screen — no typing at all.</p>
       </div>
       <!-- Status, not part of either face: it belongs UNDER whichever one is
            showing. Inside the code column it ended up above the QR whenever
@@ -677,7 +677,7 @@
       if (typeof qrcode !== "function") return;   // lib offline → the code still works
       try {
         var qr = qrcode(0, "M");
-        qr.addData("plexdownloader://pair?r=" + scanRoom);
+        qr.addData("portage://pair?r=" + scanRoom);
         qr.make();
         document.getElementById("qr").innerHTML = qr.createImgTag(5, 0);
         document.getElementById("scan").classList.remove("hidden");
