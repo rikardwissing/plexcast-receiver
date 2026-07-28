@@ -414,7 +414,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 14;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 15;   // bump when debugging cached-page confusion
   /* ES5 query parsing on purpose: URLSearchParams is Chrome 49+ and this is
      the first executable line on a 2017 TV — a TypeError here would blank the
      whole receiver. */
@@ -1651,12 +1651,52 @@
      The wire behaviour is identical — DTLS then SCTP either way; only the
      signalling token differs — and this is a no-op when no downgrade happened. */
   function modernSdpForSender(sdp) {
+    // Loose on purpose: the port field and trailing tokens vary between engines,
+    // and an over-specific pattern would silently not match and leave the answer
+    // in the shape the sender rejects.
     var text = String(sdp);
-    var found = /a=sctpmap:(\d+)/.exec(text);
-    var port = found ? found[1] : "5000";
-    text = text.replace(/^m=application (\d+) DTLS\/SCTP \d+\s*$/m,
-                        "m=application $1 UDP/DTLS/SCTP webrtc-datachannel");
-    text = text.replace(/^a=sctpmap:\d+[^\r\n]*$/m, "a=sctp-port:" + port);
+    text = text.replace(/^m=application(\s+\S+)\s+DTLS\/SCTP\s+\S+[^\r\n]*$/m,
+                        "m=application$1 UDP/DTLS/SCTP webrtc-datachannel");
+    text = text.replace(/^a=sctpmap:(\d+)[^\r\n]*$/m, "a=sctp-port:$1");
+    return text;
+  }
+  /* The salient lines of a description, for comparing an answer against the
+     offer it replies to. An answer has to agree with the offer on more than the
+     m= proto: the mid must be the same token, and it has to be the one named in
+     the BUNDLE group, or the far side cannot match the answer to the media it
+     offered and drops it. Old engines are exactly where those disagree — they
+     name the data section "data" where libwebrtc names it "0". */
+  function sdpDigest(sdp) {
+    var lines = String(sdp).split(/\r?\n/);
+    var out = { proto: "?", mid: "?", group: "?", sctp: "?", ice: "none" }, seenMedia = false;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (line.indexOf("m=") === 0) {
+        seenMedia = true;
+        var parts = line.split(" ");
+        if (parts.length > 2) out.proto = parts.slice(2).join(" ");
+      } else if (line.indexOf("a=mid:") === 0) out.mid = line.slice(6);
+      else if (line.indexOf("a=group:BUNDLE") === 0) out.group = line.slice(15);
+      else if (line.indexOf("a=sctpmap:") === 0) out.sctp = "sctpmap:" + line.slice(10).split(" ")[0];
+      else if (line.indexOf("a=sctp-port:") === 0) out.sctp = "sctp-port:" + line.slice(12);
+      else if (line.indexOf("a=ice-ufrag:") === 0 && out.ice === "none") out.ice = seenMedia ? "media" : "session";
+    }
+    return out;
+  }
+  function describeSdp(sdp) {
+    if (!sdp) return "none";
+    var d = sdpDigest(sdp);
+    return d.proto + " mid:" + d.mid + " grp:" + d.group + " " + d.sctp + " ice-" + d.ice;
+  }
+  function alignAnswerToOffer(answerSdp, offerSdp) {
+    var text = modernSdpForSender(answerSdp);
+    var offered = sdpDigest(offerSdp), ours = sdpDigest(text);
+    if (offered.mid !== "?" && ours.mid !== "?" && offered.mid !== ours.mid) {
+      text = text.replace(/^a=mid:[^\r\n]*$/m, "a=mid:" + offered.mid);
+      if (ours.group !== "?") {
+        text = text.replace(/^a=group:BUNDLE[^\r\n]*$/m, "a=group:BUNDLE " + offered.mid);
+      }
+    }
     return text;
   }
   function wait(ms) { return new Promise(function (res) { setTimeout(res, ms); }); }
@@ -1667,6 +1707,7 @@
     // screen (see handshakeSummary, assigned once the peer exists).
     var remoteCandidates = 0, sentCandidates = -1, usedLegacyOffer = false;
     var myPublic = {}, theirPublic = {};
+    var offerSdp = "", answerSdp = "";
     var handshakeSummary = function () { return "never started"; };
     if (!PeerCtor) {
       fail("This browser has no WebRTC support.");
@@ -1727,7 +1768,10 @@
              " · sent " + (sentCandidates < 0 ? "?" : sentCandidates) +
              " · theirs " + remoteCandidates +
              " · sdp " + (usedLegacyOffer ? "legacy" : "modern") +
-             " · " + sameNetworkVerdict(myPublic, theirPublic);
+             " · " + sameNetworkVerdict(myPublic, theirPublic) +
+             // The actual shapes, because reasoning about what this engine
+             // "should" emit has been wrong twice now.
+             " | ans " + describeSdp(answerSdp) + " | off " + describeSdp(offerSdp);
     };
     window.PLEXCAST_ICE_LOG = window.PLEXCAST_ICE_LOG || [];
     pc.oniceconnectionstatechange = function () {
@@ -1759,6 +1803,7 @@
       // The offer is non-trickle, so the sender's candidates ride inside it.
       // Zero here means there is nothing to connect TO, which is a sender-side
       // fault and worth telling apart from our own gathering failing.
+      offerSdp = String(parsed.sdp);   // kept so the answer can be aligned to it
       var theirLines = String(parsed.sdp).match(/^a=candidate:[^\r\n]*/gm) || [];
       remoteCandidates = theirLines.length;
       theirLines.forEach(function (line) {
@@ -1792,9 +1837,10 @@
       // eventually finds — counting at failure time would hide that.
       var localSdp = (pc.localDescription && pc.localDescription.sdp) || "";
       sentCandidates = (localSdp.match(/^a=candidate:/gm) || []).length;
-      // Answer in the profile that was OFFERED, not the one this engine speaks.
-      var answerSdp = modernSdpForSender(localSdp);
-      if (answerSdp !== localSdp) trace("answer translated back to UDP/DTLS/SCTP for the sender");
+      // Answer in the profile that was OFFERED, not the one this engine speaks,
+      // and agreeing with it on the mid/BUNDLE token as well as the m= proto.
+      answerSdp = alignAnswerToOffer(localSdp, offerSdp);
+      if (answerSdp !== localSdp) trace("answer realigned to the offer before posting");
       return postAnswer(encode({ type: (pc.localDescription && pc.localDescription.type) || "answer",
                                  sdp: answerSdp }), signalOffer.generation);
     }).then(function () {
