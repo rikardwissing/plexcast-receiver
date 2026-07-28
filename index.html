@@ -414,7 +414,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 16;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 17;   // bump when debugging cached-page confusion
   /* ES5 query parsing on purpose: URLSearchParams is Chrome 49+ and this is
      the first executable line on a 2017 TV — a TypeError here would blank the
      whole receiver. */
@@ -1699,9 +1699,11 @@
       if (finished) return;
       finished = true;
       done("pairs " + totals.pairs + " · req out " + totals.out + " resp in " + totals.backIn +
-           " · req in " + totals.inReq + " resp out " + totals.outResp);
+           " · req in " + totals.inReq + " resp out " + totals.outResp +
+           (statNames ? " · stats[" + statNames + "]" : ""));
     }
     setTimeout(finish, 2500);   // never let a stats quirk swallow the report
+    var statNames = "";
     function addLegacy(report) {
       var kind = report.type || "";
       if (kind.indexOf("andidatePair") < 0 && kind.indexOf("andidatepair") < 0) return;
@@ -1710,6 +1712,11 @@
       totals.backIn += Number(report.stat("responsesReceived")) || 0;
       totals.inReq += Number(report.stat("requestsReceived")) || 0;
       totals.outResp += Number(report.stat("responsesSent")) || 0;
+      // A missing stat and a genuine zero are indistinguishable in the totals,
+      // so record what this engine actually publishes for the first pair.
+      if (!statNames && report.names) {
+        try { statNames = report.names().join(",").slice(0, 160); } catch (e) {}
+      }
     }
     try {
       var maybe = pc.getStats(function (response) {
@@ -1731,6 +1738,28 @@
         }, finish);
       }
     } catch (e) { done("stats unavailable"); finished = true; }
+  }
+  /* A raw candidate count hides the thing that matters to an old engine: WHAT
+     the addresses are. Chrome obfuscates host candidates as "<uuid>.local" mDNS
+     names and resolves them itself; Chromium 38 has no mDNS resolver, so every
+     such candidate is dead weight to it — and IPv6 is useless on an IPv4-only
+     network. Either can leave the agent with nothing to check, which looks
+     exactly like "checking with 0 requests sent". */
+  function candidateBreakdown(sdp) {
+    var lines = String(sdp).match(/^a=candidate:[^\r\n]*/gm) || [];
+    var byType = {}, mdns = 0, v6 = 0, usable = 0;
+    for (var i = 0; i < lines.length; i++) {
+      var parts = /^a=candidate:\S+ \d+ (\S+) \d+ (\S+) \d+ typ (\w+)/.exec(lines[i]);
+      if (!parts) continue;
+      var address = parts[2], kind = parts[3];
+      byType[kind] = (byType[kind] || 0) + 1;
+      if (/\.local$/i.test(address)) mdns++;
+      else if (address.indexOf(":") >= 0) v6++;
+      else usable++;
+    }
+    var out = [], kind;
+    for (kind in byType) out.push(kind + " " + byType[kind]);
+    return out.join(" ") + " · mdns " + mdns + " · v6 " + v6 + " · plain-v4 " + usable;
   }
   function describeSdp(sdp) {
     if (!sdp) return "none";
@@ -1816,7 +1845,7 @@
       return "ice " + (iceSeen.join("→") || pc.iceConnectionState || "none") +
              " · mine " + (mine.join(", ") || "none") +
              " · sent " + (sentCandidates < 0 ? "?" : sentCandidates) +
-             " · theirs " + remoteCandidates +
+             " · theirs " + remoteCandidates + " [" + candidateBreakdown(offerSdp) + "]" +
              " · t " + ((offerAt && answerAt) ? Math.round(answerAt - offerAt) + "ms" : "?") +
              " · sdp " + (usedLegacyOffer ? "legacy" : "modern") +
              " · " + sameNetworkVerdict(myPublic, theirPublic) +
