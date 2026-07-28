@@ -414,7 +414,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 13;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 14;   // bump when debugging cached-page confusion
   /* ES5 query parsing on purpose: URLSearchParams is Chrome 49+ and this is
      the first executable line on a 2017 TV — a TypeError here would blank the
      whole receiver. */
@@ -1640,13 +1640,32 @@
     text = text.replace(/^a=sctp-port:\d+\s*$/m, "a=sctpmap:" + port + " webrtc-datachannel 1024");
     return text;
   }
+  /* The inverse, and the reason a 2017 TV could reach "ice checking" and go no
+     further while every modern browser on the same network connected fine.
+     Rewriting the offer into the 2013 shape means the answer this engine builds
+     is in that shape too — and RFC 3264 requires an answer's m= proto to MATCH
+     the offer's. The sender offered UDP/DTLS/SCTP and got back DTLS/SCTP, so
+     libwebrtc rejected the answer, never applied it, and never replied to our
+     connectivity checks: our candidates were fine, theirs were fine, and nothing
+     ever paired. Translate the answer back into the profile that was offered.
+     The wire behaviour is identical — DTLS then SCTP either way; only the
+     signalling token differs — and this is a no-op when no downgrade happened. */
+  function modernSdpForSender(sdp) {
+    var text = String(sdp);
+    var found = /a=sctpmap:(\d+)/.exec(text);
+    var port = found ? found[1] : "5000";
+    text = text.replace(/^m=application (\d+) DTLS\/SCTP \d+\s*$/m,
+                        "m=application $1 UDP/DTLS/SCTP webrtc-datachannel");
+    text = text.replace(/^a=sctpmap:\d+[^\r\n]*$/m, "a=sctp-port:" + port);
+    return text;
+  }
   function wait(ms) { return new Promise(function (res) { setTimeout(res, ms); }); }
 
   function connect() {
     disconnecting = false;   // fresh attempt — arm the drop handler again
     // Filled in as the handshake proceeds so a failure can describe itself on
     // screen (see handshakeSummary, assigned once the peer exists).
-    var remoteCandidates = 0, sentCandidates = -1;
+    var remoteCandidates = 0, sentCandidates = -1, usedLegacyOffer = false;
     var myPublic = {}, theirPublic = {};
     var handshakeSummary = function () { return "never started"; };
     if (!PeerCtor) {
@@ -1707,6 +1726,7 @@
              " · mine " + (mine.join(", ") || "none") +
              " · sent " + (sentCandidates < 0 ? "?" : sentCandidates) +
              " · theirs " + remoteCandidates +
+             " · sdp " + (usedLegacyOffer ? "legacy" : "modern") +
              " · " + sameNetworkVerdict(myPublic, theirPublic);
     };
     window.PLEXCAST_ICE_LOG = window.PLEXCAST_ICE_LOG || [];
@@ -1748,6 +1768,7 @@
       return sdpCall(pc, "setRemoteDescription", describe(parsed)).catch(function (e) {
         var rewritten = legacySdp(parsed.sdp);
         if (rewritten === parsed.sdp) throw e;
+        usedLegacyOffer = true;   // ...so the answer must be translated back (see modernSdpForSender)
         trace("setRemoteDescription failed (" + (e && e.message || e) + ") — retrying with legacy DTLS/SCTP");
         return sdpCall(pc, "setRemoteDescription", describe({ type: parsed.type, sdp: rewritten }));
       });
@@ -1771,7 +1792,11 @@
       // eventually finds — counting at failure time would hide that.
       var localSdp = (pc.localDescription && pc.localDescription.sdp) || "";
       sentCandidates = (localSdp.match(/^a=candidate:/gm) || []).length;
-      return postAnswer(encode(pc.localDescription), signalOffer.generation);
+      // Answer in the profile that was OFFERED, not the one this engine speaks.
+      var answerSdp = modernSdpForSender(localSdp);
+      if (answerSdp !== localSdp) trace("answer translated back to UDP/DTLS/SCTP for the sender");
+      return postAnswer(encode({ type: (pc.localDescription && pc.localDescription.type) || "answer",
+                                 sdp: answerSdp }), signalOffer.generation);
     }).then(function () {
       trace("answer posted for room " + room.slice(0, 8));
       // Give ICE its normal connection window. The sender acknowledges and clears
