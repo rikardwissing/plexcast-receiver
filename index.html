@@ -414,7 +414,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 17;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 18;   // bump when debugging cached-page confusion
   /* ES5 query parsing on purpose: URLSearchParams is Chrome 49+ and this is
      the first executable line on a 2017 TV — a TypeError here would blank the
      whole receiver. */
@@ -1693,29 +1693,26 @@
      Chromium 38 has only the legacy callback getStats with googCandidatePair
      reports; modern engines return a promise of RTCStatsReport. Handle both. */
   function iceStatsSummary(pc, done) {
-    var totals = { pairs: 0, out: 0, backIn: 0, inReq: 0, outResp: 0 };
+    var totals = { pairs: 0 }, rows = [];
     var finished = false;
     function finish() {
       if (finished) return;
       finished = true;
-      done("pairs " + totals.pairs + " · req out " + totals.out + " resp in " + totals.backIn +
-           " · req in " + totals.inReq + " resp out " + totals.outResp +
-           (statNames ? " · stats[" + statNames + "]" : ""));
+      done("pairs " + totals.pairs + (rows.length ? " · " + rows.join(" ; ") : " · no pair detail"));
     }
     setTimeout(finish, 2500);   // never let a stats quirk swallow the report
-    var statNames = "";
     function addLegacy(report) {
       var kind = report.type || "";
       if (kind.indexOf("andidatePair") < 0 && kind.indexOf("andidatepair") < 0) return;
       totals.pairs++;
-      totals.out += Number(report.stat("requestsSent")) || 0;
-      totals.backIn += Number(report.stat("responsesReceived")) || 0;
-      totals.inReq += Number(report.stat("requestsReceived")) || 0;
-      totals.outResp += Number(report.stat("responsesSent")) || 0;
-      // A missing stat and a genuine zero are indistinguishable in the totals,
-      // so record what this engine actually publishes for the first pair.
-      if (!statNames && report.names) {
-        try { statNames = report.names().join(",").slice(0, 160); } catch (e) {}
+      // requestsSent and friends do not exist on this build — the stat list it
+      // published proved that, and a missing stat reads as a convincing zero.
+      // These four DO exist, and they say the same thing more directly: which
+      // two addresses are being tried, and whether anything ever got through.
+      if (rows.length < 3) {
+        rows.push(report.stat("googLocalAddress") + "→" + report.stat("googRemoteAddress") +
+                  " w:" + report.stat("googWritable") + " r:" + report.stat("googReadable") +
+                  " rx:" + report.stat("bytesReceived"));
       }
     }
     try {
@@ -1729,10 +1726,10 @@
           report.forEach(function (s) {
             if (s.type !== "candidate-pair") return;
             totals.pairs++;
-            totals.out += s.requestsSent || 0;
-            totals.backIn += s.responsesReceived || 0;
-            totals.inReq += s.requestsReceived || 0;
-            totals.outResp += s.responsesSent || 0;
+            if (rows.length < 3) {
+              rows.push((s.localCandidateId || "?") + "→" + (s.remoteCandidateId || "?") +
+                        " state:" + (s.state || "?") + " rx:" + (s.bytesReceived || 0));
+            }
           });
           finish();
         }, finish);
@@ -1760,6 +1757,19 @@
     var out = [], kind;
     for (kind in byType) out.push(kind + " " + byType[kind]);
     return out.join(" ") + " · mdns " + mdns + " · v6 " + v6 + " · plain-v4 " + usable;
+  }
+  /* The sender's routable IPv4 addresses, so the two LAN subnets can be
+     compared by eye. Same public IP says both sit behind one router; it does
+     NOT say they share a subnet, and a wired TV on one VLAN with the phone on
+     another cannot reach it directly while every other device happily can. */
+  function theirV4(sdp) {
+    var lines = String(sdp).match(/^a=candidate:[^\r\n]*/gm) || [], out = [];
+    for (var i = 0; i < lines.length && out.length < 4; i++) {
+      var parts = /^a=candidate:\S+ \d+ \S+ \d+ (\S+) \d+ typ (\w+)/.exec(lines[i]);
+      if (!parts || parts[1].indexOf(":") >= 0) continue;
+      if (out.join(",").indexOf(parts[1]) < 0) out.push(parts[1]);
+    }
+    return out.join(",");
   }
   function describeSdp(sdp) {
     if (!sdp) return "none";
@@ -1829,7 +1839,7 @@
        offer arrived empty; and the ICE state we reached distinguishes "never
        paired" (new) from "paired but no path" (checking) from "path found, so a
        failure after this is DTLS or the data channel" (connected). */
-    var iceSeen = [], myCandidates = {};
+    var iceSeen = [], myCandidates = {}, myAddresses = [];
     pc.onicecandidate = function (e) {
       if (!e || !e.candidate) return;
       var line = e.candidate.candidate || "";
@@ -1838,6 +1848,10 @@
       myCandidates[kind] = (myCandidates[kind] || 0) + 1;
       var address = publicAddressOf(line);
       if (address) myPublic[address] = true;
+      var seen = /^candidate:\S+ \d+ \S+ \d+ (\S+) /.exec(line.replace(/^a=/, ""));
+      if (seen && seen[1].indexOf(":") < 0 && myAddresses.join(",").indexOf(seen[1]) < 0) {
+        myAddresses.push(seen[1]);   // IPv4 only; the subnet is the point
+      }
     };
     handshakeSummary = function () {
       var mine = [], kind;
@@ -1845,7 +1859,9 @@
       return "ice " + (iceSeen.join("→") || pc.iceConnectionState || "none") +
              " · mine " + (mine.join(", ") || "none") +
              " · sent " + (sentCandidates < 0 ? "?" : sentCandidates) +
+             " · mine-ip " + (myAddresses.join(",") || "?") +
              " · theirs " + remoteCandidates + " [" + candidateBreakdown(offerSdp) + "]" +
+             " · theirs-v4 " + (theirV4(offerSdp) || "?") +
              " · t " + ((offerAt && answerAt) ? Math.round(answerAt - offerAt) + "ms" : "?") +
              " · sdp " + (usedLegacyOffer ? "legacy" : "modern") +
              " · " + sameNetworkVerdict(myPublic, theirPublic) +
