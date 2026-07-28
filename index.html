@@ -414,7 +414,7 @@
 <script>
 (function () {
   "use strict";
-  window.PLEXCAST_VERSION = 18;   // bump when debugging cached-page confusion
+  window.PLEXCAST_VERSION = 19;   // bump when debugging cached-page confusion
   /* ES5 query parsing on purpose: URLSearchParams is Chrome 49+ and this is
      the first executable line on a 2017 TV — a TypeError here would blank the
      whole receiver. */
@@ -1693,12 +1693,13 @@
      Chromium 38 has only the legacy callback getStats with googCandidatePair
      reports; modern engines return a promise of RTCStatsReport. Handle both. */
   function iceStatsSummary(pc, done) {
-    var totals = { pairs: 0 }, rows = [];
+    var totals = { pairs: 0 }, rows = [], facts = { writable: false, dtls: "" };
     var finished = false;
     function finish() {
       if (finished) return;
       finished = true;
-      done("pairs " + totals.pairs + (rows.length ? " · " + rows.join(" ; ") : " · no pair detail"));
+      done("pairs " + totals.pairs + (rows.length ? " · " + rows.join(" ; ") : " · no pair detail") +
+           " · dtls " + (facts.dtls || "none"), facts);
     }
     setTimeout(finish, 2500);   // never let a stats quirk swallow the report
     function addLegacy(report) {
@@ -1709,16 +1710,26 @@
       // published proved that, and a missing stat reads as a convincing zero.
       // These four DO exist, and they say the same thing more directly: which
       // two addresses are being tried, and whether anything ever got through.
+      if (String(report.stat("googWritable")) === "true") facts.writable = true;
       if (rows.length < 3) {
         rows.push(report.stat("googLocalAddress") + "→" + report.stat("googRemoteAddress") +
                   " w:" + report.stat("googWritable") + " r:" + report.stat("googReadable") +
                   " rx:" + report.stat("bytesReceived"));
       }
     }
+    /* The transport report carries the negotiated DTLS cipher. A writable pair
+       with no cipher is the whole story: the two reached each other and then
+       failed to agree on a secure channel. */
+    function addTransport(report) {
+      var kind = report.type || "";
+      if (kind.indexOf("omponent") < 0 && kind.indexOf("ransport") < 0) return;
+      var cipher = report.stat("googDtlsCipher") || report.stat("dtlsCipher") || "";
+      if (cipher) facts.dtls = String(cipher).slice(0, 40);
+    }
     try {
       var maybe = pc.getStats(function (response) {
         var list = (response && response.result) ? response.result() : [];
-        for (var i = 0; i < list.length; i++) if (list[i] && list[i].stat) addLegacy(list[i]);
+        for (var i = 0; i < list.length; i++) if (list[i] && list[i].stat) { addLegacy(list[i]); addTransport(list[i]); }
         finish();
       });
       if (maybe && typeof maybe.then === "function") {
@@ -1951,7 +1962,23 @@
       return wait(12000);
     }).then(function () {
       if (wasConnected) return;
-      return new Promise(function (res) { iceStatsSummary(pc, res); }).then(function (stats) {
+      return new Promise(function (res) {
+        iceStatsSummary(pc, function (text, facts) { res({ text: text, facts: facts || {} }); });
+      }).then(function (result) {
+        var stats = result.text, facts = result.facts;
+        /* Reaching each other and then failing is not a network problem, and
+           saying "couldn't connect" for it sends people to the router. A pair
+           that went writable means ICE succeeded; no DTLS cipher after that
+           means the secure handshake did not. On a 2017 TV that is a version
+           floor, not a fault: this engine offers DTLS 1.0 and the sender's
+           libwebrtc dropped everything below 1.2, so nothing either end can be
+           told will make them agree. Name it, and point at the path that works. */
+        if (facts.writable && !facts.dtls) {
+          fail("This TV reached the sender, but its browser is too old to finish the " +
+               "secure handshake (it offers DTLS 1.0; the sender needs 1.2 or newer). " +
+               "Cast to this TV over the phone's own Wi-Fi receiver instead.");
+          throw { handled: true, why: stats };
+        }
         var why = handshakeSummary() + " | " + stats;
         trace("retry: answer sent but ICE never connected — " + why);
         try { pc.close(); } catch (x) {}
@@ -1989,6 +2016,7 @@
     var attempted;
     try { attempted = connect(); } catch (e) { attempted = Promise.reject(e); }
     attempted.catch(function (e) {
+      if (e && e.handled) return;   // already explained on screen
       if (e && e.retry && attempt < 4) {
         setStatus("Connecting…", "Trying again…");
         start(attempt + 1);
