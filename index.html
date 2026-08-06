@@ -8,23 +8,23 @@
 <style>
   :root {
     color-scheme: dark;
-    --accent: #F59E42;   /* warm amber — the app's primary */
-    --coral:  #E85E52;   /* glow gradient partner */
-    --violet: #9E78F0;   /* conversion family */
-    --deep:   #16172B;   /* deep indigo surface */
-    --ink:    #ECEAF3;
-    --muted:  #9095AD;
-    --glow: linear-gradient(135deg, var(--accent), var(--coral));
+    --accent: #19D8E6;   /* electric cyan — the app's primary */
+    --blue:   #268CFF;   /* glow gradient bridge */
+    --violet: #7B45F6;   /* conversion family */
+    --deep:   #0B0D22;   /* midnight navy surface */
+    --ink:    #F4F7FF;
+    --muted:  #AEB7D4;
+    --glow: linear-gradient(135deg, #19E2D3, var(--blue), var(--violet));
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; color: #ECEAF3; color: var(--ink);
+  html, body { margin: 0; height: 100%; color: #F4F7FF; color: var(--ink);
     font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased; }
-  /* "Projector in a dark room": warm amber light on deep indigo. */
-  body { background: radial-gradient(1200px 640px at 50% -10%, rgba(245,158,66,0.20), transparent 60%),
-      radial-gradient(900px 620px at 88% 116%, rgba(158,120,240,0.16), transparent 60%),
-      #16172B; background: radial-gradient(1200px 640px at 50% -10%, rgba(245,158,66,0.20), transparent 60%),
-      radial-gradient(900px 620px at 88% 116%, rgba(158,120,240,0.16), transparent 60%),
+  /* The mark's own light in a dark room: electric cyan on midnight navy. */
+  body { background: radial-gradient(1200px 640px at 50% -10%, rgba(25,216,230,0.20), transparent 60%),
+      radial-gradient(900px 620px at 88% 116%, rgba(123,69,246,0.16), transparent 60%),
+      #0B0D22; background: radial-gradient(1200px 640px at 50% -10%, rgba(25,216,230,0.20), transparent 60%),
+      radial-gradient(900px 620px at 88% 116%, rgba(123,69,246,0.16), transparent 60%),
       var(--deep); }
   #stage { position: fixed; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center;
     justify-content: center; padding: 24px; box-sizing: border-box; }
@@ -45,11 +45,11 @@
 
   .mark { width: 66px; height: 66px; margin: 0 auto 18px; display: block;
     border-radius: 16px;
-    filter: drop-shadow(0 10px 24px rgba(245,158,66,0.38)); }
+    filter: drop-shadow(0 10px 24px rgba(25,216,230,0.38)); }
   .wordmark { font-size: 12px; letter-spacing: 3.5px; text-transform: uppercase;
-    color: #9095AD; color: var(--muted); font-weight: 700; margin: 0 0 8px; }
+    color: #AEB7D4; color: var(--muted); font-weight: 700; margin: 0 0 8px; }
   h1 { font-size: 25px; font-weight: 700; letter-spacing: -0.3px; margin: 0 0 6px; }
-  .sub { color: #9095AD; color: var(--muted); font-size: 15px; margin: 0 0 26px; }
+  .sub { color: #AEB7D4; color: var(--muted); font-size: 15px; margin: 0 0 26px; }
 
   /* The screen's own code — read from here, typed into the app. Wide letter
      spacing and an unambiguous alphabet so it survives being read across a
@@ -58,7 +58,7 @@
     margin: 10px 0 4px;
     font: 700 46px/1.1 ui-monospace, "SF Mono", Menlo, monospace;
     letter-spacing: 10px; text-indent: 10px;   /* indent balances the trailing gap */
-    color: #F59E42; color: var(--accent);
+    color: #19D8E6; color: var(--accent);
     -webkit-user-select: all; user-select: all;
   }
 
@@ -70,12 +70,12 @@
   .cell { width: 60px; height: 76px; border-radius: 18px;
     background: rgba(255,255,255,0.04); border: 1.5px solid rgba(255,255,255,0.13);
     display: flex; align-items: center; justify-content: center;
-    font: 700 42px/1 ui-monospace, "SF Mono", Menlo, monospace; color: #ECEAF3; color: var(--ink);
+    font: 700 42px/1 ui-monospace, "SF Mono", Menlo, monospace; color: #F4F7FF; color: var(--ink);
     transition: border-color .15s, box-shadow .15s, transform .15s; }
   .cell.filled { border-color: rgba(255,255,255,0.30); }
-  .cell.active { border-color: #F59E42; border-color: var(--accent); transform: translateY(-2px);
-    box-shadow: 0 0 0 4px rgba(245,158,66,0.16); }
-  .cell.active::after { content: ""; width: 2px; height: 36px; background: #F59E42; background: var(--accent);
+  .cell.active { border-color: #19D8E6; border-color: var(--accent); transform: translateY(-2px);
+    box-shadow: 0 0 0 4px rgba(25,216,230,0.16); }
+  .cell.active::after { content: ""; width: 2px; height: 36px; background: #19D8E6; background: var(--accent);
     border-radius: 2px; animation: blink 1.1s step-end infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   #code { position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; opacity: 0;
@@ -83,25 +83,25 @@
 
   .btn { display: inline-flex; align-items: center; justify-content: center;
     width: 100%; height: 54px; border: 0; border-radius: 16px; cursor: pointer;
-    font-size: 17px; font-weight: 700; color: #2A1305; background-image: linear-gradient(135deg, #F59E42, #E85E52); background-image: var(--glow);
-    box-shadow: 0 14px 32px -12px rgba(245,158,66,0.65);
+    font-size: 17px; font-weight: 700; color: #0B0D22; background-image: linear-gradient(135deg, #19E2D3, #268CFF, #7B45F6); background-image: var(--glow);
+    box-shadow: 0 14px 32px -12px rgba(38,140,255,0.55);
     transition: transform .1s, filter .15s, opacity .15s; }
   .btn:active { transform: translateY(1px); filter: brightness(0.96); }
-  /* Disabled reads as an empty field waiting for input, not as a muddy amber
-     bar: greyscaling a gradient looked like a rendering fault on a TV. */
+  /* Disabled reads as an empty field waiting for input, not as a muddy
+     gradient bar: greyscaling one looked like a rendering fault on a TV. */
   .btn:disabled {
     background-image: none; background-color: rgba(255,255,255,0.06);
-    color: #9095AD; color: var(--muted);
+    color: #AEB7D4; color: var(--muted);
     border: 1px solid rgba(255,255,255,0.08);
     box-shadow: none; cursor: default; opacity: 1;
   }
 
   .spinner { width: 44px; height: 44px; margin: 10px auto 18px;
-    border: 3.5px solid rgba(245,158,66,0.18); border-top-color: #F59E42; border-top-color: var(--accent);
+    border: 3.5px solid rgba(25,216,230,0.18); border-top-color: #19D8E6; border-top-color: var(--accent);
     border-radius: 50%; animation: spin 0.9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  #status { color: #9095AD; color: var(--muted); font-size: 14px; margin-top: 14px; min-height: 18px; }
-  .signal-error { color: #ff8d86; font-size: 13px; line-height: 1.35; margin: 14px 0 0;
+  #status { color: #AEB7D4; color: var(--muted); font-size: 14px; margin-top: 14px; min-height: 18px; }
+  .signal-error { color: #F05D74; font-size: 13px; line-height: 1.35; margin: 14px 0 0;
     min-height: 18px; }
 
 
@@ -121,7 +121,7 @@
   /* Text-only affordance; shown only where the QR is collapsed (phones). */
   .linkbtn { display: none; margin: 14px auto 0; padding: 8px 4px;
     background: none; border: 0; cursor: pointer;
-    font-size: 14px; font-weight: 600; color: #F59E42; color: var(--accent); }
+    font-size: 14px; font-weight: 600; color: #19D8E6; color: var(--accent); }
   @media (min-width: 660px) and (orientation: landscape) {
     /* wrap so the status footer drops below both columns instead of becoming
        a third one beside the QR. */
@@ -166,8 +166,8 @@
     background: rgba(11,12,24,0.58); -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px); z-index: 15; }
   #reconnect.show { display: flex; }
   #reconnect .rc-box { text-align: center; }
-  #reconnect .rc-title { margin-top: 14px; font-size: 18px; font-weight: 700; color: #ECEAF3; color: var(--ink); }
-  #reconnect .rc-sub { margin-top: 6px; font-size: 14px; color: #9095AD; color: var(--muted); }
+  #reconnect .rc-title { margin-top: 14px; font-size: 18px; font-weight: 700; color: #F4F7FF; color: var(--ink); }
+  #reconnect .rc-sub { margin-top: 6px; font-size: 14px; color: #AEB7D4; color: var(--muted); }
 
   /* Paired senders on the landing: we're listening for their casts. */
   /* This is status, and status the user has already been told once: a screen
@@ -181,9 +181,9 @@
   #pairs { margin: 18px 0 0; }
   .pairrow { display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center;
     -webkit-justify-content: center; justify-content: center;
-    font-size: 12px; color: #9095AD; color: var(--muted); }
+    font-size: 12px; color: #AEB7D4; color: var(--muted); }
   .pairrow > * + * { margin-left: 7px; }
-  .pairrow .dot { width: 5px; height: 5px; border-radius: 50%; background: #F59E42; background: var(--accent);
+  .pairrow .dot { width: 5px; height: 5px; border-radius: 50%; background: #19D8E6; background: var(--accent);
     opacity: 0.85; animation: pulse 1.6s ease-in-out infinite; flex: none; }
   @keyframes pulse { 50% { opacity: 0.2; } }
   .pairrow .name { font-weight: 500; min-width: 0;
@@ -194,11 +194,11 @@
      much to hang off a glyph. Kept at the line's weight so it reads as part
      of the sentence until you go looking for it. */
   .pairrow .forget { flex: none; border: 0; background: transparent; padding: 0;
-    color: #9095AD; color: var(--muted); font: inherit; text-decoration: underline;
+    color: #AEB7D4; color: var(--muted); font: inherit; text-decoration: underline;
     text-underline-offset: 2px; opacity: 0.75; cursor: pointer; }
-  .pairrow .forget:hover { color: #ECEAF3; color: var(--ink); opacity: 1; }
+  .pairrow .forget:hover { color: #F4F7FF; color: var(--ink); opacity: 1; }
   #scan { margin-top: 22px; }
-  .scanor { color: #9095AD; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 2px;
+  .scanor { color: #AEB7D4; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 2px;
     margin: 0 0 16px; position: relative; }
   .scanor::before, .scanor::after { content: ""; position: absolute; top: 50%; width: 32%;
     height: 1px; background: rgba(255,255,255,0.12); }
@@ -280,10 +280,10 @@
 </style>
 </head>
 <body>
-  <!-- Shared logo gradient (amber → coral), referenced by both marks. -->
+  <!-- Shared logo gradient (cyan → azure → violet), referenced by both marks. -->
   <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#F59E42"/><stop offset="1" stop-color="#E85E52"/>
+      <stop offset="0" stop-color="#19E2D3"/><stop offset="0.5" stop-color="#268CFF"/><stop offset="1" stop-color="#7B45F6"/>
     </linearGradient>
   </defs></svg>
 
