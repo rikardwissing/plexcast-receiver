@@ -1276,6 +1276,23 @@
   // A sender seek sets v.currentTime; when the engine drives playback it must
   // move the demux to match, or the video stalls at an unbuffered position.
   v.addEventListener("seeking", function () { if (engine) engine.reposition(v.currentTime || 0); });
+  // Stall forensics for the engine path: when playback starves, log where the
+  // head sat relative to what was buffered — cheap, fires only on trouble.
+  function bufferedText() {
+    var out = [];
+    try {
+      for (var i = 0; i < v.buffered.length; i++) {
+        out.push(Math.round(v.buffered.start(i) * 10) / 10 + "-" + Math.round(v.buffered.end(i) * 10) / 10);
+      }
+    } catch (e) {}
+    return out.join(",") || "none";
+  }
+  v.addEventListener("waiting", function () {
+    if (engine) trace("video waiting t=" + (Math.round((v.currentTime || 0) * 100) / 100) + " buffered=" + bufferedText());
+  });
+  v.addEventListener("stalled", function () {
+    if (engine) trace("video stalled t=" + (Math.round((v.currentTime || 0) * 100) / 100) + " buffered=" + bufferedText());
+  });
 
   // ---- Subtitles: WebVTT sidecars as <track> overlays ------------------------
   // A muxed MP4's embedded text subs can't ride native <video>, so the sender
