@@ -331,8 +331,21 @@
         if(self.dead||gen!==self.fetchGen)return;
         if(buf.byteLength<CHUNK){self.finish(gen);return;}
         if(!self.readyFired){
-          /* Still hunting for the moov: follow mp4box's parse pointer. */
-          self.fetchOffset=typeof next==='number'?next:start+buf.byteLength;
+          /* Still hunting for the moov: follow mp4box's parse pointer — but
+             never back INTO the window just appended. While a box is bigger
+             than one chunk (a long movie's moov easily is), mp4box answers
+             with the offset of the still-incomplete box, which is inside the
+             bytes we just gave it; refetching from there re-feeds the same
+             chunk and pins the engine in a hot loop on one range (observed
+             live: the same 2 MB served 20×/second forever). Anything pointing
+             back into this window means: keep reading forward — mp4box
+             accumulates the partial box until it completes. */
+          var jump=typeof next==='number'?next:start+buf.byteLength;
+          if(jump>=start&&jump<start+buf.byteLength){
+            trace('engine: parse pointer '+jump+' inside appended ['+start+'-'+(start+buf.byteLength)+') — reading on');
+            jump=start+buf.byteLength;
+          }
+          self.fetchOffset=jump;
         }else{
           /* Extraction needs every mdat byte — mp4box's parse pointer would
              skip straight past unparsed sample data to EOF, ending the
