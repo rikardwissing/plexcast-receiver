@@ -355,7 +355,16 @@
              skip straight past unparsed sample data to EOF, ending the
              stream minutes early. Fetch sequentially instead. */
           var nextOff=start+buf.byteLength;
-          if(self.parsedTail&&nextOff>=self.parsedTail.start){
+          /* Skip the tail only when the cursor lands INSIDE it. The old
+             unbounded `nextOff >= tail.start` REWOUND any position past the
+             tail back to tail.end — and when the moov spans a chunk boundary,
+             ready fires mid-append and that ordinary chunk gets recorded as
+             the "tail", so every advance past it snapped back: the same 2 MB
+             range served ~370× in one sitting (the stall, caught in the
+             sender log). Inside-only bounds keep the real moov-at-end skip
+             and make the bogus-tail case harmless — skipping bytes that are
+             genuinely already parsed. */
+          if(self.parsedTail&&nextOff>=self.parsedTail.start&&nextOff<self.parsedTail.end){
             if(self.parsedTail.end>=(self.totalBytes||Infinity)){self.finish(gen);return;}
             nextOff=self.parsedTail.end;
           }

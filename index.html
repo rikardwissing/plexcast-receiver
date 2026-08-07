@@ -548,7 +548,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-07.3";
+  window.RECEIVER_VERSION = "2026-08-07.4";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -567,8 +567,12 @@
   var h1 = panel.querySelector("h1");
 
   function setStatus(main, sub) { if (main) h1.textContent = main; if (sub !== undefined) statusEl.textContent = sub; }
-  function showVideo() { v.classList.remove("hidden"); panel.classList.add("hidden"); entry.classList.add("hidden"); hideReconnect(); }
-  function showPanel() { v.classList.add("hidden"); panel.classList.remove("hidden"); entry.classList.add("hidden");
+  /* The version badge belongs to the idle faces — over video it's clutter. */
+  function versionBadge(on) {
+    try { document.getElementById("receiver-version").style.display = on ? "" : "none"; } catch (e) {}
+  }
+  function showVideo() { v.classList.remove("hidden"); panel.classList.add("hidden"); entry.classList.add("hidden"); hideReconnect(); versionBadge(false); }
+  function showPanel() { versionBadge(true); v.classList.add("hidden"); panel.classList.remove("hidden"); entry.classList.add("hidden");
     panel.querySelector(".spinner").style.display = ""; }
   // The reconnect overlay sits OVER the video — it does not hide it, so the
   // last frame stays frozen underneath while we re-handshake.
@@ -720,6 +724,7 @@
   if (!room) {
     panel.classList.add("hidden");
     entry.classList.remove("hidden");
+    versionBadge(true);
     var submitted = false;
 
     // Six characters from an alphabet with no 0/O, 1/I/L or U — a billion
@@ -838,6 +843,7 @@
       activeSignal = null;
       panel.classList.add("hidden");
       entry.classList.remove("hidden");
+      versionBadge(true);
       renderPairs();
       listenLanding();
     };
