@@ -18,8 +18,16 @@
 // e.g.  __rtc_stream__?p=%2Fmedia  → the phone's "/media".
 
 const MARKER = "/__rtc_stream__";
-const WINDOW = 256 * 1024; // per data-channel round-trip — small so a seek's
-                           // stale window drains fast and the queue frees quickly.
+const WINDOW = 1024 * 1024;  // per data-channel round-trip. Big enough that
+                             // round-trip dead time doesn't cap throughput
+                             // below a high-bitrate MP4; a seek's stale window
+                             // still aborts at the sender, so it never blocks
+                             // the newly-seeked range for long.
+// How far ahead of playback the stream buffers. The pull loop keeps asking
+// until this many bytes are queued — without it the browser pulled one window
+// at a time, fully serialized with the link's round trip, and "certain
+// videos" (the high-bitrate ones) starved into a stall.
+const READAHEAD = 6 * 1024 * 1024;
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
@@ -66,11 +74,18 @@ async function serve(request, path) {
       if (cursor > lastByte) controller.close();
     },
     async pull(controller) {
-      if (cancelled || cursor > lastByte) { controller.close(); return; }
+      if (cancelled) { controller.close(); return; }
+      if (cursor > lastByte) { controller.close(); return; }
       const upto = Math.min(cursor + WINDOW - 1, lastByte);
       const win = await ask(path, cursor, upto, (a) => { inflight = a; });
       if (cancelled) return;   // seeked away while awaiting — drop it
-      if (!win || !win.bytes || win.bytes.byteLength === 0) { controller.close(); return; }
+      if (!win || (win.status && win.status >= 400) || !win.bytes || win.bytes.byteLength === 0) {
+        // Mid-stream failure. Closing here used to masquerade as a clean
+        // (short) end — the <video> then waited forever for bytes that were
+        // never coming. Erroring lets the element notice and recover.
+        controller.error(new Error("window fetch failed mid-stream"));
+        return;
+      }
       controller.enqueue(new Uint8Array(win.bytes));
       cursor += win.bytes.byteLength;
       if (cursor > lastByte) controller.close();
@@ -79,7 +94,7 @@ async function serve(request, path) {
       cancelled = true;
       if (inflight) inflight.abort();   // stop the sender streaming the stale window
     }
-  });
+  }, new ByteLengthQueuingStrategy({ highWaterMark: READAHEAD }));
 
   const headers = {
     "Content-Type": first.ctype || "video/mp4",

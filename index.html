@@ -1164,8 +1164,29 @@
     }, 15000);
   }
   v.addEventListener("loadeddata", clearStall);
+  var rtcResumedAt = 0;
   v.addEventListener("error", function () {
     if (!v.getAttribute("src") && !hls) return;   // teardown noise
+    var src = v.getAttribute("src") || "";
+    // The rolling rtc stream errors when a byte window is lost mid-flight
+    // (deliberate — a silent short body looked like a clean end and hung the
+    // element forever). One quiet resume from the same position, at most
+    // every ten seconds; a stream that can't hold even that falls through to
+    // the honest message.
+    if (src.indexOf("__rtc_stream__") !== -1 && Date.now() - rtcResumedAt > 10000) {
+      rtcResumedAt = Date.now();
+      var at = v.currentTime || 0;
+      trace("rtc stream errored — resuming at " + at.toFixed(1) + "s");
+      v.load();
+      v.src = src;
+      v.addEventListener("loadedmetadata", function once() {
+        v.removeEventListener("loadedmetadata", once);
+        if (at > 0) { try { v.currentTime = at; } catch (e) {} }
+      });
+      armStall();
+      play();
+      return;
+    }
     var err = v.error;
     playbackError("The browser reported a media error" +
                   (err && err.message ? ": " + err.message : "") + ".");
