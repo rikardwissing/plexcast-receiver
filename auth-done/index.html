@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="../icon.png">
+<title>Portage</title>
+<style>
+  /* The one-beat trampoline between plex.tv and the app: Plex's auth page
+     only forwards to http(s) URLs, so it lands here and this page hands off
+     to the portage:// scheme. Same brand surface as the receiver. */
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; color: #F4F7FF;
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  body { background: radial-gradient(1200px 640px at 50% -10%, rgba(25,216,230,0.16), transparent 60%),
+      radial-gradient(900px 620px at 88% 116%, rgba(123,69,246,0.12), transparent 60%),
+      #0B0D22;
+    display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; }
+  .card { width: 100%; max-width: 380px; text-align: center; padding: 40px 30px;
+    border-radius: 30px; background: rgba(255,255,255,0.035);
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 40px 90px -34px rgba(0,0,0,0.85); }
+  .mark { width: 66px; height: 66px; margin: 0 auto 18px; display: block; border-radius: 16px;
+    filter: drop-shadow(0 10px 24px rgba(25,216,230,0.38)); }
+  h1 { font-size: 22px; font-weight: 700; margin: 0 0 6px; }
+  p { color: #AEB7D4; font-size: 15px; margin: 0 0 24px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center;
+    width: 100%; height: 52px; border-radius: 16px; text-decoration: none;
+    font-size: 17px; font-weight: 700; color: #0B0D22;
+    background-image: linear-gradient(135deg, #19E2D3, #268CFF, #7B45F6);
+    box-shadow: 0 14px 32px -12px rgba(38,140,255,0.55); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <img class="mark" src="../icon.png" alt="">
+    <h1>You're signed in</h1>
+    <p>Heading back to Portage — if nothing happens, tap the button.</p>
+    <a class="btn" href="portage://auth-done">Open Portage</a>
+  </div>
+  <script>
+    // Try the handoff immediately; Safari may require the tap above when a
+    // scripted custom-scheme jump is blocked, which is what the button is for.
+    setTimeout(function () { location.href = "portage://auth-done"; }, 300);
+  </script>
+</body>
+</html>
