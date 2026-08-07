@@ -287,6 +287,13 @@
     </linearGradient>
   </defs></svg>
 
+  <!-- Which build this page is — 28% white in a corner, invisible until you
+       look for it. Same value rides the hello into the sender's log. -->
+  <div style="position:fixed;right:10px;bottom:8px;font-size:10px;letter-spacing:0.5px;
+              color:rgba(244,247,255,0.28);z-index:5;pointer-events:none"
+       id="receiver-version"></div>
+  <script>try{document.getElementById("receiver-version").textContent=window.RECEIVER_VERSION;}catch(e){}</script>
+
   <div id="stage">
     <video id="v" class="hidden" playsinline controls></video>
 
@@ -516,6 +523,10 @@
     else location.href = location.pathname;
   }
   // QA trace of the connect state machine (timestamped one-liners).
+  /* Bumped on every receiver change — the corner badge and the hello both
+     carry it, so "is the TV running the latest?" is answerable at a glance
+     (and from the sender's diagnostics log). */
+  window.RECEIVER_VERSION = "2026-08-07.1";
   window.PLEXCAST_TRACE = [];
   function trace(s) {
     window.PLEXCAST_TRACE.push(Math.round(performance.now()/1000) + "s " + s);
@@ -1891,6 +1902,7 @@
         // a fresh code doesn't create a duplicate pairing on either end.
         try {
           dc.send(JSON.stringify({ t: "hello", label: viewerLabel(),
+                                   v: window.RECEIVER_VERSION,
                                    pairings: loadPairs().map(function (p) { return p.id; }) }));
         } catch (x) {}
       };
