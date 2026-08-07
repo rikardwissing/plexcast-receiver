@@ -274,6 +274,7 @@
   };
   MseEngine.prototype.bufferedAheadSec=function(){return Math.min(this.aheadOf('video'),this.aheadOf('audio'))};
   MseEngine.prototype.finish=function(gen){
+    trace('engine finish gen='+gen+' @'+this.fetchOffset);
     this.mp4.flush();
     if(this.videoTrackId!=null)this.emitFragments(this.videoTrackId,'video',true);
     if(this.audioTrackId!=null)this.emitFragments(this.audioTrackId,'audio',true);
@@ -289,6 +290,9 @@
      same .abort() surface reposition/destroy expect. */
   MseEngine.prototype.pump=function(offset){
     var self=this, gen=++this.fetchGen, CHUNK=2*1024*1024;
+    /* One line per pump: healthy playback pumps once per seek; a pump storm
+       IS the bug being hunted, and this makes it name its caller's cadence. */
+    trace('engine pump @'+offset+' gen='+gen);
     this.fetchOffset=offset;
     function step(){
       if(self.dead||gen!==self.fetchGen) return;
@@ -426,6 +430,7 @@
     this.resetExtraction();
     this.releaseConsumed();
     var seek;try{seek=this.mp4.seek(Math.max(0,timeSec),true)}catch(e){trace('engine seek failed: '+e);return;}
+    trace('engine reposition t='+(Math.round(timeSec*100)/100)+' → @'+seek.offset);
     this.pump(seek.offset);
   };
   MseEngine.prototype.setAudioTrack=function(index){
