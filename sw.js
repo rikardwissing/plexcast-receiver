@@ -94,22 +94,55 @@ async function serve(request, path) {
 /// Ask the receiver page (which owns the data channel) for one byte window.
 /// `setAbort` receives an { abort } handle that tells the page to abort THIS
 /// window's request at the sender (and unblocks our await).
+///
+/// With a WATCHDOG: a postMessage lost mid page-transition (or a reply the
+/// page never manages to send) used to leave this promise pending forever —
+/// the video showed an infinite loader until a manual seek started a fresh
+/// fetch. One quiet retry with a new channel, then give up so the player
+/// errors (and recovers) instead of spinning.
+const ASK_TIMEOUT_MS = 12000;
+
 async function ask(path, start, end, setAbort) {
   const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
   const client = clients[0];
   if (!client) return null;
   return new Promise((resolve) => {
-    const channel = new MessageChannel();
     let settled = false;
-    channel.port1.onmessage = (ev) => { if (!settled) { settled = true; resolve(ev.data); } };
-    setAbort({
-      abort() {
-        if (settled) return;
-        settled = true;
-        try { channel.port1.postMessage({ abort: true }); } catch (e) {}
-        resolve(null);
+    let timer = null;
+    let attempt = 0;
+
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(value);
+    };
+
+    const send = () => {
+      attempt += 1;
+      // A fresh MessageChannel per attempt — a transferred port can't be
+      // reused, and the stale one may be exactly what got lost.
+      const channel = new MessageChannel();
+      channel.port1.onmessage = (ev) => finish(ev.data);
+      setAbort({
+        abort() {
+          if (settled) return;
+          try { channel.port1.postMessage({ abort: true }); } catch (e) {}
+          finish(null);
+        }
+      });
+      try {
+        client.postMessage({ type: "rtc-range", path, start, end }, [channel.port2]);
+      } catch (e) {
+        finish(null);
+        return;
       }
-    });
-    client.postMessage({ type: "rtc-range", path, start, end }, [channel.port2]);
+      timer = setTimeout(() => {
+        if (settled) return;
+        if (attempt < 2) { send(); } else { finish(null); }
+      }, ASK_TIMEOUT_MS);
+    };
+
+    send();
   });
 }
