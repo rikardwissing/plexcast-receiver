@@ -517,7 +517,17 @@
   }
   // QA trace of the connect state machine (timestamped one-liners).
   window.PLEXCAST_TRACE = [];
-  function trace(s) { window.PLEXCAST_TRACE.push(Math.round(performance.now()/1000) + "s " + s); }
+  function trace(s) {
+    window.PLEXCAST_TRACE.push(Math.round(performance.now()/1000) + "s " + s);
+    // Mirror to the sender's diagnostics log over the data channel — the
+    // viewer usually has no devtools open when something goes wrong, and the
+    // in-page array dies with the tab.
+    try {
+      if (typeof dc !== "undefined" && dc && dc.readyState === "open") {
+        dc.send(JSON.stringify({ t: "trace", message: s }));
+      }
+    } catch (e) {}
+  }
   var h1 = panel.querySelector("h1");
 
   function setStatus(main, sub) { if (main) h1.textContent = main; if (sub !== undefined) statusEl.textContent = sub; }
@@ -1022,7 +1032,11 @@
       // in-flight request at the SENDER too — its IO queue is serial, so a stale
       // window left draining over a slow uplink would block the newly-seeked range.
       port.onmessage = function (ev) {
-        if (ev.data && ev.data.abort) { done = true; if (reqId != null) cancelRequest(reqId); }
+        if (ev.data && ev.data.abort) {
+          done = true;
+          trace("sw window ABORT #" + reqId + " [" + d.start + "-" + d.end + "]");
+          if (reqId != null) cancelRequest(reqId);
+        }
       };
       fetchOverChannel(d.path, { start: d.start, end: d.end,
                                  onId: function (id) { reqId = id; } }).then(function (r) {
@@ -1031,9 +1045,11 @@
         var meta = r.meta || {}, buf = r.data.buffer;
         port.postMessage({ status: meta.status || 206, total: meta.total || 0,
                            ctype: meta.ctype || "video/mp4", bytes: buf }, [buf]);
-      }).catch(function () {
+      }).catch(function (err) {
         if (done) return;
         done = true;
+        trace("sw window FAIL #" + reqId + " [" + d.start + "-" + d.end + "] " +
+              ((err && err.message) || "?"));
         port.postMessage({ status: 502, total: 0, bytes: new ArrayBuffer(0) });
       });
     });
