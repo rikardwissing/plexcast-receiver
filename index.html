@@ -56,8 +56,11 @@
      room; monospaced so every glyph occupies the same slot. */
   .screencode {
     margin: 10px 0 4px;
+    /* Scales with the viewport so a shrunken two-column card can't push the
+       last glyph over the divider; em-based spacing follows the size. */
     font: 700 46px/1.1 ui-monospace, "SF Mono", Menlo, monospace;
-    letter-spacing: 10px; text-indent: 10px;   /* indent balances the trailing gap */
+    font-size: clamp(30px, 6vw, 46px);
+    letter-spacing: 0.22em; text-indent: 0.22em;   /* indent balances the trailing gap */
     color: #19D8E6; color: var(--accent);
     -webkit-user-select: all; user-select: all;
   }
@@ -130,7 +133,12 @@
     /* Equal air either side of the line. The divider box begins at #scan's
        left edge and centres its rule, so the right column has to clear a
        further half-box: padding-left = padding-right + box width. */
-    .entry-code { flex: 1 1 auto; padding-right: 22px; }
+    /* flex-basis 0 + min-width 0, NOT auto: with auto, the code column's
+       preferred width (its widest line of text) could exceed the room left
+       beside the QR, and the wrap meant for the status footer swallowed the
+       whole scan column — stacked faces wearing the vertical divider
+       (observed at 674×612). Basis 0 makes the column shrink instead. */
+    .entry-code { flex: 1 1 0; min-width: 0; padding-right: 22px; }
     /* The divider IS the "or" here: a line, the word, a line — running down
        the gap instead of a bare rule with the label hidden. */
     #scan.entry-col {
@@ -243,11 +251,26 @@
     #pairs { margin-top: 14px; }
   }
 
+  /* Between the phone cutoff and the two-column threshold (521-659px wide)
+     the card is STACKED but got none of the phone's QR-collapse — a full QR
+     plus a divider styled for columns it didn't have (the squashed "or").
+     Same rule as phones: one face at a time, QR behind a line of text. */
+  @media (min-width: 521px) and (max-width: 659px) {
+    #scan { display: none; }
+    #entry.showing-qr #scan { display: block; }
+    #entry.showing-qr .screencode,
+    #entry.showing-qr .codehint,
+    #entry.showing-qr .scanor { display: none; }
+    #scanmore { display: block; }
+  }
+
   /* Landscape phones: two columns already, but the card ran off a 390px-tall
      screen at full size. Everything shrinks rather than anything being cut, so
      the mark and wordmark survive — and the QR stays square because its
-     CONTAINER is sized, never the image. */
-  @media (orientation: landscape) and (max-height: 520px) {
+     CONTAINER is sized, never the image. Gated on the SAME min-width as the
+     two-column layout: without it these divider tweaks hit the stacked card
+     (541×440 showed a squashed, off-center "or"). */
+  @media (min-width: 660px) and (orientation: landscape) and (max-height: 520px) {
     /* Generous side margins and a capped card: filling a phone's full width
        edge to edge left the two columns stranded far apart, which read as
        stretched rather than roomy. */
@@ -292,7 +315,6 @@
   <div style="position:fixed;right:10px;bottom:8px;font-size:10px;letter-spacing:0.5px;
               color:rgba(244,247,255,0.28);z-index:5;pointer-events:none"
        id="receiver-version"></div>
-  <script>try{document.getElementById("receiver-version").textContent=window.RECEIVER_VERSION;}catch(e){}</script>
 
   <div id="stage">
     <video id="v" class="hidden" playsinline controls></video>
@@ -526,7 +548,10 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-07.1";
+  window.RECEIVER_VERSION = "2026-08-07.3";
+  /* Fill the badge HERE, not from an inline script beside the div — that one
+     ran before this block defined the version and stamped an empty corner. */
+  try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
   window.PLEXCAST_TRACE = [];
   function trace(s) {
     window.PLEXCAST_TRACE.push(Math.round(performance.now()/1000) + "s " + s);
