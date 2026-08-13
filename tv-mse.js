@@ -530,6 +530,32 @@
         }
         step();
       }
+      /* The moov may already be arriving unasked. The sender starts pushing it
+         when it sends the load, so by the time the probe has landed and the
+         parse pointer points here, most or all of it is in hand — and on a
+         cellular uplink that is two round trips of latency and the whole ramp-up
+         of the session's biggest transfer, removed.
+         `pending` must WAIT rather than fetch: re-requesting a 4.46 MB range
+         already in flight would double someone's mobile data and, on one ordered
+         channel, the duplicate would queue behind the original anyway. */
+      if(exact&&self.pushedMoov){
+        var pushed=self.pushedMoov(start,want);
+        if(pushed&&pushed.data){
+          /* An ArrayBuffer, exactly `want` long — consume() stamps fileStart on
+             it and hands it to mp4box like any fetched window. */
+          trace('engine moov from push: '+pushed.data.byteLength+' bytes @'+start+' (no request)');
+          consume(pushed.data,206,'push');
+          return;
+        }
+        if(pushed&&pushed.pending){
+          self.pushWaitMs=(self.pushWaitMs||0)+100;
+          if(self.pushWaitMs<20000){
+            setTimeout(function(){ if(!self.dead&&gen===self.fetchGen)step(); },100);
+            return;
+          }
+          trace('engine moov push did not finish in 20s — requesting it');
+        }
+      }
       /* Injected byte source (WebRTC data channel). Ranges are inclusive on
          both ends, matching the HTTP Range header the default source sends. */
       if(self.fetcher){

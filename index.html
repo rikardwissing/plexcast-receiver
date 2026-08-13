@@ -442,11 +442,11 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-13.13"></script>
-<script src="mp4box.all.min.js?v=2026-08-13.13"></script>
+<script src="tv-polyfills.js?v=2026-08-13.14"></script>
+<script src="mp4box.all.min.js?v=2026-08-13.14"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-13.13"></script>
+<script src="tv-mse.js?v=2026-08-13.14"></script>
 <script>
 (function () {
   "use strict";
@@ -555,7 +555,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-13.13";
+  window.RECEIVER_VERSION = "2026-08-13.14";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -881,6 +881,9 @@
   // JSON {t:"res",id,status,len,ctype} header then binary body chunks (4-byte
   // LE id prefix), an empty-body chunk marking EOF. Multiple requests can be
   // in flight; each is keyed by id.
+  // The sender's unsolicited moov for the current load: announced by `initmoov`,
+  // filled by `onBody`, consumed by the engine in place of a request.
+  var initMoov = null;
   var reqId = 1;
   var pending = {};   // id -> {resolve, reject, meta, chunks, got, timer, channel}
   // This is an INACTIVITY deadline, not a whole-request deadline. Every header
@@ -1020,6 +1023,16 @@
         // (no reload). Guard on gen so a stale list can't attach to newer media.
         if (obj.gen == null || obj.gen === currentGen) applySubtitles(obj.subs);
         break;
+      case "initmoov": {
+        // The sender is streaming this load's moov WITHOUT being asked, so the
+        // 4.46 MB that gates first frame starts moving at load time instead of
+        // after two round trips of uplink latency. Keyed by generation: a swap
+        // supersedes it, and the sender stops sending the moment it does.
+        initMoov = { gen: obj.gen, id: obj.id, start: obj.start, len: obj.len,
+                     chunks: [], got: 0, done: false, failed: false };
+        trace("moov push announced: gen " + obj.gen + " @" + obj.start + " len=" + obj.len);
+        break;
+      }
       case "res": {
         var p = pending[obj.id];
         if (p) { p.meta = obj; armRequestTimer(obj.id); }
@@ -1038,6 +1051,34 @@
     var view = new DataView(buf);
     if (buf.byteLength < 4) return;
     var id = view.getUint32(0, true);
+    // Unsolicited moov push: no `pending` entry exists for it, because nobody
+    // asked. Its id comes from the top of the range, where `reqId` (which starts
+    // at 1 and counts up) can never reach.
+    if (initMoov && !initMoov.done && !initMoov.failed && id === initMoov.id) {
+      if (buf.byteLength === 4) {
+        var whole = new Uint8Array(initMoov.got), at = 0;
+        for (var c = 0; c < initMoov.chunks.length; c++) {
+          whole.set(initMoov.chunks[c], at); at += initMoov.chunks[c].length;
+        }
+        initMoov.chunks = null;
+        if (initMoov.got === initMoov.len) {
+          // The ArrayBuffer, not the view: the engine hands it straight to
+          // mp4box, which stamps fileStart on it.
+          initMoov.data = whole.buffer;
+          initMoov.done = true;
+          trace("moov push complete: " + initMoov.got + " bytes");
+        } else {
+          // Short: the engine falls back to requesting it, rather than appending
+          // a truncated moov that would never parse.
+          initMoov.failed = true;
+          trace("moov push short: got " + initMoov.got + " of " + initMoov.len);
+        }
+      } else {
+        initMoov.chunks.push(new Uint8Array(buf, 4));
+        initMoov.got += buf.byteLength - 4;
+      }
+      return;
+    }
     var p = pending[id];
     if (!p) return;
     if (buf.byteLength === 4) {
@@ -1561,6 +1602,18 @@
       if (m.init && m.init.len > 0) {
         engine.initRange = { start: m.init.start, length: m.init.len };
         trace("init hint: moov @" + m.init.start + " len=" + m.init.len);
+        // Where the engine asks whether the pushed moov is here yet. Three
+        // answers, because "not yet" and "never" need different behaviour:
+        // a ready buffer is used instead of a request; `pending` makes the engine
+        // wait rather than re-download 4.46 MB of someone's mobile data it is
+        // already receiving; null means fetch it the old way.
+        engine.pushedMoov = function (start, len) {
+          if (!initMoov || initMoov.gen !== currentGen) return null;
+          if (initMoov.failed) return null;
+          if (initMoov.start !== start || initMoov.len !== len) return null;
+          if (initMoov.done) return { data: initMoov.data };
+          return { pending: true };
+        };
       }
       v.src = engine.objectUrl;
       // The engine switches audio by reloading at the live position with the new
