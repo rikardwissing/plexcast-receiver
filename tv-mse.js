@@ -6,6 +6,13 @@
    block's typeof-MseEngine guard falls back to plain <video src>. */
 (function(){
   var v=document.getElementById('v');
+  /* The media element, for pages that don't have a #v to find.
+     A Cast receiver's element belongs to CAF, not to us, so the Chromecast
+     receiver hands over a stand-in before it builds an engine. The engine wants
+     remarkably little from it — `currentTime` and `error`, nothing else; every
+     buffered range it reasons about comes from the SourceBuffers — so a shim
+     over playerManager is a faithful substitute rather than a fudge. */
+  window.tvSetMediaElement=function(el){ if(el)v=el; };
   function trace(message){ if(window.tvReport){try{window.tvReport(message);return}catch(e){}} try{console.log('plexcast:',message)}catch(e2){} }
   /* Wall clock for the cost traces below. A trace emitted while the main thread
      is blocked cannot be SENT until the block ends, so timestamps on separate
