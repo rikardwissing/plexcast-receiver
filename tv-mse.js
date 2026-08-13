@@ -337,6 +337,23 @@
         /* Read by the page's stall watchdog: a transfer still moving must never
            be mistaken for one that has died. */
         self.bytesAppended=(self.bytesAppended||0)+buf.byteLength;
+        /* THE append that discovered the moov: readyFired flipped during the
+           appendBuffer above, and it landed past the start of the file — a
+           moov-at-end layout. Remember the parsed tail so the post-ready
+           sequential fetch neither re-downloads it nor runs past it.
+           The test used to be `readyFired && start>0`, which is true of every
+           post-ready sequential append; it escaped re-arming the "tail" on all
+           of them only by sitting inside the thinned `loud` trace, and so still
+           clobbered it every 32nd append. That IS the bogus tail the skip below
+           has to bound against — fixed here rather than defended against there.
+           Recorded BEFORE the generation handoff, because parsed bytes are a
+           fact about the file whoever asked for them, and the discovering
+           append is precisely the one onReady retires mid-call. */
+        if(!wasReady&&self.readyFired&&start>0){
+          self.parsedTail={start:start,end:start+buf.byteLength};
+          trace('engine parsedTail armed @'+self.parsedTail.start+'-'+self.parsedTail.end+
+                ' (total='+(self.totalBytes==null?'?':self.totalBytes)+')');
+        }
         /* appendBuffer is RE-ENTRANT: mp4box fires onReady from inside it, and
            onReady repositions — retiring this generation and issuing the next
            request before the append above has even returned. Everything below
@@ -370,14 +387,6 @@
                 ' len='+buf.byteLength+' box='+tag+' cr='+(rangeText||'none')+
                 ' next='+next+' ready='+(self.readyFired?1:0)+
                 ' want='+(self.requestedStart==null?'?':self.requestedStart));
-          /* A pre-ready jump landed on the moov (moov-at-end file). Remember
-             the parsed tail so the post-ready sequential fetch neither
-             re-downloads it nor runs past it. */
-          if(self.readyFired&&start>0){
-            self.parsedTail={start:start,end:start+buf.byteLength};
-            trace('engine parsedTail armed @'+self.parsedTail.start+'-'+self.parsedTail.end+
-                  ' (total='+(self.totalBytes==null?'?':self.totalBytes)+')');
-          }
         }
         if(self.dead||gen!==self.fetchGen)return;
         if(buf.byteLength<want){self.finish(gen);return;}
@@ -487,7 +496,11 @@
        real fetch failure (pump() takes the next generation below). */
     this.fetchGen++;
     if(this.inflight){try{this.inflight.abort()}catch(e){}this.inflight=null;}
-    trace('engine reposition: dropping parsedTail='+
+    /* "dropping parsedTail=" it said, for months, while never assigning it —
+       there is no writer here and never was. It is KEPT deliberately: the moov
+       of a moov-at-end file stays parsed across a seek, and re-downloading it
+       every reposition would be pure waste. Say what happens. */
+    trace('engine reposition: keeping parsedTail='+
           (this.parsedTail?this.parsedTail.start+'-'+this.parsedTail.end:'none')+
           ' ready='+(this.readyFired?1:0));
     this.resetExtraction();
