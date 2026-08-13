@@ -7,6 +7,14 @@
 (function(){
   var v=document.getElementById('v');
   function trace(message){ if(window.tvReport){try{window.tvReport(message);return}catch(e){}} try{console.log('plexcast:',message)}catch(e2){} }
+  /* Wall clock for the cost traces below. A trace emitted while the main thread
+     is blocked cannot be SENT until the block ends, so timestamps on separate
+     traces all bunch up at the end and lie about which call cost what. Measure
+     with deltas and report in one line. */
+  var nowMs=(window.performance&&window.performance.now)
+    ? function(){return window.performance.now()}
+    : function(){return (new Date()).getTime()};
+  function ms(delta){ return Math.round(delta)+'ms'; }
   /* The codec gate and fatal-error surface live in the ES5 main block
      (tv-main.js), which parses everywhere and exports window.tvHelpers.
      Dereference at CALL time — this file executes before tv-main.js. */
@@ -172,12 +180,32 @@
       self.buffers[kind].addEventListener('updateend',function(){self.drain(kind)});
     });
     this.seq={video:0,audio:0};
+    /* Phase costs, reported in one line below. onReady sits inside
+       appendBuffer and its tail calls reposition, so 'engine ready' on its own
+       said only that ~3.9 s had gone somewhere in here. */
+    var tInit=nowMs();
     try{
       this.enqueue('video',this.buildInit(video.id,'video'));
       this.enqueue('audio',this.buildInit(audio.id,'audio'));
     }catch(eInit){playbackError('Could not prepare this video for streaming.');trace('engine init build failed: '+eInit);return;}
+    var tExtract=nowMs();
     this.resetExtraction();
-    this.mp4.start(); trace('engine ready: video '+video.codec+', '+this.audioTracks.length+' audio, playing #'+this.wantAudioIndex);
+    var tStart=nowMs();
+    this.mp4.start();
+    var tDone=nowMs();
+    /* Sample counts, because they are what makes the per-sample loops in
+       releaseConsumed and mp4box's own seek expensive: a 70-minute film carries
+       ~106k video frames and ~198k AAC frames. */
+    var counts='';
+    try{
+      var vtrak=this.mp4.getTrackById(video.id), atrak=this.mp4.getTrackById(audio.id);
+      counts=' samples=v'+((vtrak&&vtrak.samples)?vtrak.samples.length:'?')+
+             '/a'+((atrak&&atrak.samples)?atrak.samples.length:'?');
+    }catch(eCount){}
+    trace('engine ready cost: buildInit='+ms(tExtract-tInit)+
+          ' resetExtraction='+ms(tStart-tExtract)+
+          ' mp4.start='+ms(tDone-tStart)+counts);
+    trace('engine ready: video '+video.codec+', '+this.audioTracks.length+' audio, playing #'+this.wantAudioIndex);
     this.reposition(0);
   };
   /* (Re)register extraction with fresh accumulators. mp4box keeps a
@@ -319,12 +347,19 @@
         if(self.dead||gen!==self.fetchGen)return;
         if(!buf||!buf.byteLength){self.finish(gen);return;}
         buf.fileStart=start;
-        var next, wasReady=self.readyFired;
+        var next, wasReady=self.readyFired, parseStart=nowMs(), parseMs=0;
+        /* This one call is where the startup time hides. Measured on the TV, the
+           append that completed the moov took 3.87 s between its fetch landing
+           and 'engine ready' — and onReady runs INSIDE appendBuffer, which in
+           turn calls reposition, so this number brackets mp4box's parse plus
+           everything onReady and the first reposition do. The phase traces in
+           onReady and reposition break down what is inside it. */
         try{ next=self.mp4.appendBuffer(buf); }
         catch(e){
           self.fatal('append failed @'+start+': '+e+(e&&e.stack?' | '+String(e.stack).slice(0,400):''));
           return;
         }
+        parseMs=nowMs()-parseStart;
         /* Startup forensics: until onReady fires, record exactly what each
            append saw — a mis-ranged response (http 200, wrong length, or a
            head that isn't a box tag) is invisible after the fact otherwise. */
@@ -367,7 +402,11 @@
            generation's fetchOffset. Hand off here; the new generation owns the
            cursor now. */
         if(self.dead||gen!==self.fetchGen){
-          trace('engine append @'+start+' len='+buf.byteLength+
+          /* parse= belongs here above all: the append that completes the moov
+             is exactly the one whose generation onReady retires, so reporting
+             it only on the normal path below would drop the single number this
+             instrumentation exists to capture. */
+          trace('engine append @'+start+' len='+buf.byteLength+' parse='+ms(parseMs)+
                 ': gen '+gen+' retired during append — handing off');
           return;
         }
@@ -386,7 +425,8 @@
           trace('engine append #'+self.appendCount+' @'+start+' http='+status+
                 ' len='+buf.byteLength+' box='+tag+' cr='+(rangeText||'none')+
                 ' next='+next+' ready='+(self.readyFired?1:0)+
-                ' want='+(self.requestedStart==null?'?':self.requestedStart));
+                ' want='+(self.requestedStart==null?'?':self.requestedStart)+
+                ' parse='+ms(parseMs));
         }
         if(self.dead||gen!==self.fetchGen)return;
         if(buf.byteLength<want){self.finish(gen);return;}
@@ -483,12 +523,33 @@
   MseEngine.prototype.releaseConsumed=function(){
     var ids=[this.videoTrackId];
     for(var a=0;a<this.audioTracks.length;a++)ids.push(this.audioTracks[a].id);
+    /* Instrumented, not changed — and the scan and the free are timed apart,
+       because they are very different costs and the obvious suspect is not the
+       guilty one. The scan walks EVERY sample of every track to find the last
+       one already read, which looks damning until you measure it: 304k samples
+       (a 70-minute film: ~106k video frames, ~198k AAC) scanned in 7 ms in a
+       Node harness. Even thirty times slower on a 2017 TV that is 0.2 s, not
+       the 5.94 s the first reposition costs. releaseUsedSamples freeing several
+       hundred thousand sample buffers on a memory-starved device is the far
+       better candidate — and it is the one a Mac harness cannot reproduce,
+       since nothing there has been consumed to free. So: measure on the TV. */
+    var scanned=0, released=0, scanMs=0, freeMs=0, t;
     for(var k=0;k<ids.length;k++){
       var trak=this.mp4.getTrackById(ids[k]);if(!trak||!trak.samples)continue;
       var upto=0;
+      t=nowMs();
       for(var i=0;i<trak.samples.length;i++)if(trak.samples[i].alreadyRead>0)upto=i+1;
-      if(upto>0){trak.lastValidSample=0;try{this.mp4.releaseUsedSamples(ids[k],upto)}catch(e){}}
+      scanMs+=nowMs()-t;
+      scanned+=trak.samples.length;
+      if(upto>0){
+        released+=upto;trak.lastValidSample=0;
+        t=nowMs();
+        try{this.mp4.releaseUsedSamples(ids[k],upto)}catch(e){}
+        freeMs+=nowMs()-t;
+      }
     }
+    this.lastReleaseStats='scan='+ms(scanMs)+' free='+ms(freeMs)+
+                          ' scanned='+scanned+' released='+released;
   };
   MseEngine.prototype.reposition=function(timeSec){
     /* Retire the current generation BEFORE aborting so a byte source that
@@ -503,9 +564,24 @@
     trace('engine reposition: keeping parsedTail='+
           (this.parsedTail?this.parsedTail.start+'-'+this.parsedTail.end:'none')+
           ' ready='+(this.readyFired?1:0));
+    /* One line for three calls, deliberately. The FIRST reposition — the one
+       onReady triggers — took 5.94 s on the TV while every later one took
+       ~0.3 s, and from outside these three are indistinguishable. Separate
+       traces could not tell them apart either: emitted while the main thread is
+       blocked, none of them can be sent until the block ends, so their
+       timestamps would all pile up at the far side. */
+    var t0=nowMs();
     this.resetExtraction();
+    var t1=nowMs();
     this.releaseConsumed();
+    var t2=nowMs();
     var seek;try{seek=this.mp4.seek(Math.max(0,timeSec),true)}catch(e){trace('engine seek failed: '+e);return;}
+    var t3=nowMs();
+    trace('engine reposition cost: resetExtraction='+ms(t1-t0)+
+          ' releaseConsumed='+ms(t2-t1)+' ('+(this.lastReleaseStats||'?')+')'+
+          ' seek='+ms(t3-t2)+' total='+ms(t3-t0)+
+          ' first='+(this.repositionCount?0:1));
+    this.repositionCount=(this.repositionCount||0)+1;
     trace('engine reposition t='+(Math.round(timeSec*100)/100)+' → @'+seek.offset);
     this.pump(seek.offset);
   };
