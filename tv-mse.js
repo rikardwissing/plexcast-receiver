@@ -374,23 +374,21 @@
         var moovEnd=self.initRange.start+self.initRange.length;
         if(start>=self.initRange.start&&start<moovEnd&&
            (self.totalBytes==null||moovEnd<=self.totalBytes)){
-          /* CAPPED AT CHUNK, and that cap is the whole lesson. Asking for the
-             entire 4.46 MB moov in one request did collapse three round trips
-             into one, exactly as designed — and made startup WORSE: measured on
-             the wire, 4.46 MB in a single request took 7.7 s (0.58 MB/s) where
-             the same bytes in 2 MB pieces took 2.3 s (1.93 MB/s), and 2 MB media
-             requests in that very session ran at 1.27–1.51 MB/s. One sample, and
-             no mechanism found yet (256 KB of send buffer at a 5 ms poll only
-             explains a few hundred ms of per-request burst) — so this keeps the
-             request size that is measured to work and takes only the part of the
-             hint that cannot hurt: never read PAST the end of the moov. For a
-             moov at the end of the file that is what already happened, so this
-             is a no-op there; for a +faststart file whose moov is followed by
-             mdat it stops over-fetching up to 2 MB of sample data nobody
-             needs. */
+          /* The whole moov in one request, and NOT capped at CHUNK.
+             It was capped for one commit, on one sample: a 4.46 MB single
+             request had measured 0.58 MB/s against 1.93 MB/s for the same bytes
+             in 2 MB pieces, so request size looked like the culprit. The sender
+             then reported where that time went — drain=1573ms of 1597ms, 98%
+             spent waiting for the data channel to accept bytes — and a second
+             run of the same single request managed 2.66 MB/s, FASTER than the
+             2 MB requests after it in the same session (1.45 and 1.67 MB/s),
+             with startup at 2.28 s against the chunked 3.27 s. The transport is
+             the limit and it is variable; the request size was never the cause.
+             So: one request, and reading past the moov's end is what the length
+             prevents. */
           var remaining=moovEnd-start;
-          want=Math.min(remaining,CHUNK);
-          exact=(want===remaining);
+          want=remaining;
+          exact=true;
         }
       }
       /* Shared by both byte sources: parse, append, trace, advance. */
