@@ -293,6 +293,11 @@
     /* One line per pump: healthy playback pumps once per seek; a pump storm
        IS the bug being hunted, and this makes it name its caller's cadence. */
     trace('engine pump @'+offset+' gen='+gen);
+    /* The first probe of a moov-at-end file exists to read one number: where
+       mp4box says to look next. It cost a full 2 MB chunk — 2-5s over a data
+       channel — to learn it. 64 KB carries ftyp and the head of the next box,
+       which is all the parse pointer needs. */
+    var PROBE=64*1024;
     this.fetchOffset=offset;
     function step(){
       if(self.dead||gen!==self.fetchGen) return;
@@ -306,6 +311,9 @@
       if(self.totalBytes!=null&&self.fetchOffset>=self.totalBytes){self.finish(gen);return;}
       var start=self.fetchOffset;
       self.requestedStart=start;
+      /* Small first look; full chunks once we know where we are going. `want`
+         travels with the request so a short body isn't misread as EOF. */
+      var want=(!self.readyFired&&start===0&&self.appendCount==null)?PROBE:CHUNK;
       /* Shared by both byte sources: parse, append, trace, advance. */
       function consume(buf,status,rangeText){
         if(self.dead||gen!==self.fetchGen)return;
@@ -326,6 +334,9 @@
            that append, by construction. Post-ready appends trace too now,
            thinned so a 1 GB file can't drown the log. */
         self.appendCount=(self.appendCount||0)+1;
+        /* Read by the page's stall watchdog: a transfer still moving must never
+           be mistaken for one that has died. */
+        self.bytesAppended=(self.bytesAppended||0)+buf.byteLength;
         var loud=!wasReady||self.appendCount<=4||self.appendCount%32===0;
         if(self.requestedStart!=null&&self.requestedStart!==start){
           /* A byte source serving a range nobody asked for looks exactly like
@@ -352,7 +363,7 @@
           }
         }
         if(self.dead||gen!==self.fetchGen)return;
-        if(buf.byteLength<CHUNK){self.finish(gen);return;}
+        if(buf.byteLength<want){self.finish(gen);return;}
         if(!self.readyFired){
           /* Still hunting for the moov: follow mp4box's parse pointer — but
              never back INTO the window just appended. While a box is bigger
@@ -398,7 +409,7 @@
       /* Injected byte source (WebRTC data channel). Ranges are inclusive on
          both ends, matching the HTTP Range header the default source sends. */
       if(self.fetcher){
-        var req=self.fetcher(self.path,start,start+CHUNK-1,function(err,res){
+        var req=self.fetcher(self.path,start,start+want-1,function(err,res){
           if(self.inflight===req)self.inflight=null;
           if(self.dead||gen!==self.fetchGen)return;
           if(err){self.fatal('fetch failed @'+start+': '+(err&&err.message||err));return;}
@@ -414,7 +425,7 @@
       self.inflight=xhr;
       xhr.open('GET',self.path,true);
       xhr.responseType='arraybuffer';
-      xhr.setRequestHeader('Range','bytes='+start+'-'+(start+CHUNK-1));
+      xhr.setRequestHeader('Range','bytes='+start+'-'+(start+want-1));
       xhr.onload=function(){
         if(self.inflight===xhr)self.inflight=null;
         if(self.dead||gen!==self.fetchGen)return;

@@ -548,7 +548,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-13.5";
+  window.RECEIVER_VERSION = "2026-08-13.6";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1155,7 +1155,7 @@
 
   var hls = null;
   var stallTimer = null;
-  function clearStall() { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; } }
+  function clearStall() { if (stallTimer) { clearInterval(stallTimer); stallTimer = null; } }
   /* Playback finished, or the sender stopped casting: the connection is still
      up, so this is the same "ready for the next pick" screen the other two
      receivers show — an invitation, not a dead end reading "Stopped". The
@@ -1211,15 +1211,49 @@
     } catch (e) { return true; }
   }
 
-  // The net under everything: if nothing decodes within 15s of starting, the
-  // format is (in practice) unplayable — say so instead of spinning forever.
+  // The net under everything — but it must catch a stream that has STOPPED,
+  // not one that is merely slow.
+  //
+  // This was a flat 15s from the start of playback, testing only readyState.
+  // Measured against a 1.1 GB direct MP4 over the data channel: four attempts
+  // reached "engine ready" at 18.4s, 14.8s, 9.1s and 13.9s, and the 9.1s one
+  // is the ONLY one that played. The other three were killed mid-load and told
+  // the viewer the format was unsupported — about a file that plays fine given
+  // another five seconds. A constant here is a tax on slow links, and the
+  // codec question is already answered properly by canPlay/isTypeSupported
+  // before we ever get this far.
+  //
+  // So: give up only on genuine silence. Every tick, take a cheap fingerprint
+  // of progress (bytes the engine has appended, the buffered ranges, the
+  // readyState). Anything moving re-arms; nothing moving for STALL_GIVEUP ends
+  // it, and the message no longer blames the format for a stalled transfer.
+  var STALL_TICK = 2000, STALL_GIVEUP = 30000, stallSilentMs = 0, stallMark = "";
+  function progressMark() {
+    var ranges = "";
+    try {
+      for (var i = 0; i < v.buffered.length; i++) {
+        ranges += v.buffered.start(i).toFixed(1) + "-" + v.buffered.end(i).toFixed(1) + ",";
+      }
+    } catch (e) {}
+    var appended = 0;
+    try { appended = (engine && engine.bytesAppended) || 0; } catch (e2) {}
+    return appended + "|" + ranges + "|" + v.readyState;
+  }
   function armStall() {
     clearStall();
-    stallTimer = setTimeout(function () {
-      if (v.readyState < 2) {
-        playbackError("Nothing is decoding — this format may be unsupported by the browser.");
-      }
-    }, 15000);
+    stallSilentMs = 0;
+    stallMark = progressMark();
+    stallTimer = setInterval(function () {
+      if (v.readyState >= 2) { clearStall(); return; }
+      var now = progressMark();
+      if (now !== stallMark) { stallMark = now; stallSilentMs = 0; return; }
+      stallSilentMs += STALL_TICK;
+      if (stallSilentMs < STALL_GIVEUP) return;
+      clearStall();
+      trace("stall: no progress for " + (STALL_GIVEUP / 1000) + "s (" + now + ")");
+      playbackError("Nothing arrived for " + (STALL_GIVEUP / 1000) +
+                    " seconds — the connection may have dropped.");
+    }, STALL_TICK);
   }
   v.addEventListener("loadeddata", clearStall);
   var rtcResumedAt = 0;
