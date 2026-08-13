@@ -28,6 +28,7 @@
     this.mp4=MP4Box.createFile(); this.buffers={}; this.queues={video:[],audio:[]};
     this.initSegs={}; this.audioTracks=[]; this.videoTrackId=null; this.audioTrackId=null;
     this.fetchOffset=0; this.fetchGen=0; this.inflight=null; this.totalBytes=null; this.dead=false;
+    this.initRange=null;                                     // {start,length} from the load, when known
     window.__engine=this;                                    // QA/debug handle
     var self=this;
     this.mediaSource.addEventListener('sourceopen',function(){self.onSourceOpen()});
@@ -49,6 +50,14 @@
     this.mp4.onError=function(e){self.fatal('mp4box error: '+e)};
     this.mp4.onReady=function(info){self.onReady(info)};
     this.mp4.onSamples=function(id,kind,samples){self.onSamples(id,kind,samples)};
+    /* Still from byte 0. Starting at the moov was tried and does NOT work:
+       mp4box will not fire onReady from a moov alone — it needs a contiguous
+       run from the start of the file, far enough to read the mdat header and
+       learn to skip to the moov. Measured against real mp4box: moov alone, no
+       ready; 40 bytes of head then moov, no ready; 64 KB of head then moov,
+       ready with both tracks. So the probe stays, and what the sender's hint
+       buys is the SIZE of the moov (see step below), not its position — the
+       parse pointer already reports that correctly. */
     this.pump(0);
   };
   /* Byte-level box builders. u8 concat helper first: box('moov',a,b,...)
@@ -206,7 +215,14 @@
           ' resetExtraction='+ms(tStart-tExtract)+
           ' mp4.start='+ms(tDone-tStart)+counts);
     trace('engine ready: video '+video.codec+', '+this.audioTracks.length+' audio, playing #'+this.wantAudioIndex);
-    this.reposition(0);
+    /* Where the viewer actually wants to be, not byte zero. The page sets
+       v.currentTime from the load's startTime before the engine is ready, so
+       repositioning to 0 aimed at the head of the file, issued a request, and was
+       superseded microseconds later when the seek handler repositioned to the
+       real start — one generation and one request thrown away on every resume,
+       which is most casts. Reading v directly needs no new API: the page has
+       already put the answer there. */
+    this.reposition(v&&v.currentTime?v.currentTime:0);
   };
   /* (Re)register extraction with fresh accumulators. mp4box keeps a
      pending per-track batch between appends; releasing sample data or
@@ -342,6 +358,23 @@
       /* Small first look; full chunks once we know where we are going. `want`
          travels with the request so a short body isn't misread as EOF. */
       var want=(!self.readyFired&&start===0&&self.appendCount==null)?PROBE:CHUNK;
+      /* Ask for the moov in ONE request of exactly its size.
+         The probe already lands the parse pointer on the moov — what it cannot
+         know is how big the box is, so the fetch fell back to blind 2 MB chunks
+         and a 4.25 MB moov cost three round trips (measured: 792 ms + 1370 ms +
+         150 ms) plus a short tail read. The sender reads the real length off
+         local disk in a few 16-byte reads and sends it with the load. Worth more
+         than the round trips it saves here: a long film's moov scales, and at
+         2 MB a chunk a 20 MB header is ten serial round trips before anything
+         decodes.
+         Guarded on totalBytes so a stale or wrong hint can't ask past the end
+         of the file. */
+      var exact=false;
+      if(!self.readyFired&&self.initRange&&start===self.initRange.start&&
+         self.initRange.length>0&&
+         (self.totalBytes==null||start+self.initRange.length<=self.totalBytes)){
+        want=self.initRange.length; exact=true;
+      }
       /* Shared by both byte sources: parse, append, trace, advance. */
       function consume(buf,status,rangeText){
         if(self.dead||gen!==self.fetchGen)return;
@@ -429,7 +462,16 @@
                 ' parse='+ms(parseMs));
         }
         if(self.dead||gen!==self.fetchGen)return;
-        if(buf.byteLength<want){self.finish(gen);return;}
+        if(buf.byteLength<want){
+          /* A short read normally means end of file. Not for the exact-size moov
+             request: there, short means the sender's hint disagreed with what the
+             file served, and treating that as EOF would end the stream before
+             anything decoded. Drop the hint and let the parse pointer carry on
+             exactly as it did before hints existed. */
+          if(!exact){self.finish(gen);return;}
+          trace('engine init hint short: asked '+want+' got '+buf.byteLength+' — dropping hint');
+          self.initRange=null;
+        }
         if(!self.readyFired){
           /* Still hunting for the moov: follow mp4box's parse pointer — but
              never back INTO the window just appended. While a box is bigger
