@@ -370,10 +370,28 @@
          Guarded on totalBytes so a stale or wrong hint can't ask past the end
          of the file. */
       var exact=false;
-      if(!self.readyFired&&self.initRange&&start===self.initRange.start&&
-         self.initRange.length>0&&
-         (self.totalBytes==null||start+self.initRange.length<=self.totalBytes)){
-        want=self.initRange.length; exact=true;
+      if(!self.readyFired&&self.initRange&&self.initRange.length>0){
+        var moovEnd=self.initRange.start+self.initRange.length;
+        if(start>=self.initRange.start&&start<moovEnd&&
+           (self.totalBytes==null||moovEnd<=self.totalBytes)){
+          /* CAPPED AT CHUNK, and that cap is the whole lesson. Asking for the
+             entire 4.46 MB moov in one request did collapse three round trips
+             into one, exactly as designed — and made startup WORSE: measured on
+             the wire, 4.46 MB in a single request took 7.7 s (0.58 MB/s) where
+             the same bytes in 2 MB pieces took 2.3 s (1.93 MB/s), and 2 MB media
+             requests in that very session ran at 1.27–1.51 MB/s. One sample, and
+             no mechanism found yet (256 KB of send buffer at a 5 ms poll only
+             explains a few hundred ms of per-request burst) — so this keeps the
+             request size that is measured to work and takes only the part of the
+             hint that cannot hurt: never read PAST the end of the moov. For a
+             moov at the end of the file that is what already happened, so this
+             is a no-op there; for a +faststart file whose moov is followed by
+             mdat it stops over-fetching up to 2 MB of sample data nobody
+             needs. */
+          var remaining=moovEnd-start;
+          want=Math.min(remaining,CHUNK);
+          exact=(want===remaining);
+        }
       }
       /* Shared by both byte sources: parse, append, trace, advance. */
       function consume(buf,status,rangeText){
