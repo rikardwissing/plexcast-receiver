@@ -523,24 +523,38 @@
   MseEngine.prototype.releaseConsumed=function(){
     var ids=[this.videoTrackId];
     for(var a=0;a<this.audioTracks.length;a++)ids.push(this.audioTracks[a].id);
-    /* Instrumented, not changed — and the scan and the free are timed apart,
-       because they are very different costs and the obvious suspect is not the
-       guilty one. The scan walks EVERY sample of every track to find the last
-       one already read, which looks damning until you measure it: 304k samples
-       (a 70-minute film: ~106k video frames, ~198k AAC) scanned in 7 ms in a
-       Node harness. Even thirty times slower on a 2017 TV that is 0.2 s, not
-       the 5.94 s the first reposition costs. releaseUsedSamples freeing several
-       hundred thousand sample buffers on a memory-starved device is the far
-       better candidate — and it is the one a Mac harness cannot reproduce,
-       since nothing there has been consumed to free. So: measure on the TV. */
+    /* STOP at the first unread sample instead of walking all of them.
+       This loop ran to the end of every track to find the last sample already
+       read, and on the TV that cost 3036 ms — to discover that 6 samples out of
+       288,061 had been read. It was 35% of an 8.6 s startup, every reposition,
+       with the main thread frozen throughout. A Node harness on a Mac timed the
+       same loop at 7 ms and had me calling it exonerated; the device is 430×
+       slower and the only measurement that counted was the one from the
+       television.
+       Breaking early is not an approximation: consumed samples form a prefix, so
+       the last read sample is the one before the first unread one. Verified
+       against real mp4box output — full scan and early exit agreed exactly
+       (224 and 420 on a 70-minute file) while the exit cost 0.01 ms against
+       2.6 ms. (The other candidate, a high-water mark from onSamples, did NOT
+       agree — 200 against 224 — because mp4box reads bytes ahead of what it
+       delivers. It would have quietly released less.)
+       The one give: should mp4box ever read non-contiguously, after a
+       discontinuous seek say, this returns a smaller `upto` and frees less than
+       before. Worth it — every reposition observed released 6 samples, so the
+       full scan was burning three seconds to free almost nothing, and the
+       instrumentation below would show any divergence as a surprising
+       `released=`. */
     var scanned=0, released=0, scanMs=0, freeMs=0, t;
     for(var k=0;k<ids.length;k++){
       var trak=this.mp4.getTrackById(ids[k]);if(!trak||!trak.samples)continue;
       var upto=0;
       t=nowMs();
-      for(var i=0;i<trak.samples.length;i++)if(trak.samples[i].alreadyRead>0)upto=i+1;
+      for(var i=0;i<trak.samples.length;i++){
+        if(!(trak.samples[i].alreadyRead>0))break;
+        upto=i+1;
+      }
       scanMs+=nowMs()-t;
-      scanned+=trak.samples.length;
+      scanned+=upto+1;   /* what the loop actually touched, not the track length */
       if(upto>0){
         released+=upto;trak.lastValidSample=0;
         t=nowMs();
@@ -549,7 +563,7 @@
       }
     }
     this.lastReleaseStats='scan='+ms(scanMs)+' free='+ms(freeMs)+
-                          ' scanned='+scanned+' released='+released;
+                          ' touched='+scanned+' released='+released;
   };
   MseEngine.prototype.reposition=function(timeSec){
     /* Retire the current generation BEFORE aborting so a byte source that
