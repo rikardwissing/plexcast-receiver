@@ -337,6 +337,23 @@
         /* Read by the page's stall watchdog: a transfer still moving must never
            be mistaken for one that has died. */
         self.bytesAppended=(self.bytesAppended||0)+buf.byteLength;
+        /* appendBuffer is RE-ENTRANT: mp4box fires onReady from inside it, and
+           onReady repositions — retiring this generation and issuing the next
+           request before the append above has even returned. Everything below
+           belongs to a generation that no longer exists. Left to run it
+           compared `start` against the NEW request's requestedStart and cried
+           "RANGE MISMATCH: asked @65536 got @1128452362" — a phantom, logged
+           3 ms after a pump it was nested inside, and read for a whole
+           investigation as a data channel serving stale bodies. Worse, it
+           armed parsedTail from the very append reposition had just finished
+           dropping the tail for, and would have overwritten the fresh
+           generation's fetchOffset. Hand off here; the new generation owns the
+           cursor now. */
+        if(self.dead||gen!==self.fetchGen){
+          trace('engine append @'+start+' len='+buf.byteLength+
+                ': gen '+gen+' retired during append — handing off');
+          return;
+        }
         var loud=!wasReady||self.appendCount<=4||self.appendCount%32===0;
         if(self.requestedStart!=null&&self.requestedStart!==start){
           /* A byte source serving a range nobody asked for looks exactly like
