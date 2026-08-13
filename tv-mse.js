@@ -305,6 +305,7 @@
       }
       if(self.totalBytes!=null&&self.fetchOffset>=self.totalBytes){self.finish(gen);return;}
       var start=self.fetchOffset;
+      self.requestedStart=start;
       /* Shared by both byte sources: parse, append, trace, advance. */
       function consume(buf,status,rangeText){
         if(self.dead||gen!==self.fetchGen)return;
@@ -319,18 +320,36 @@
         /* Startup forensics: until onReady fires, record exactly what each
            append saw — a mis-ranged response (http 200, wrong length, or a
            head that isn't a box tag) is invisible after the fact otherwise. */
-        if(!wasReady){
+        /* This traced ONLY while !wasReady, and the failure that actually bites
+           happens after onReady: a direct MP4 reaches "engine ready", appends
+           one more buffer and reports nothing decoding — with no log line for
+           that append, by construction. Post-ready appends trace too now,
+           thinned so a 1 GB file can't drown the log. */
+        self.appendCount=(self.appendCount||0)+1;
+        var loud=!wasReady||self.appendCount<=4||self.appendCount%32===0;
+        if(self.requestedStart!=null&&self.requestedStart!==start){
+          /* A byte source serving a range nobody asked for looks exactly like
+             the cursor moving on its own, and those need different fixes. */
+          trace('engine RANGE MISMATCH: asked @'+self.requestedStart+' got @'+start);
+        }
+        if(loud){
           var tag='';
           try{
             var dv=new DataView(buf);
             tag=String.fromCharCode(dv.getUint8(4),dv.getUint8(5),dv.getUint8(6),dv.getUint8(7));
           }catch(eTag){}
-          trace('engine append @'+start+' http='+status+' len='+buf.byteLength+
-                ' box='+tag+' cr='+(rangeText||'none')+' next='+next);
+          trace('engine append #'+self.appendCount+' @'+start+' http='+status+
+                ' len='+buf.byteLength+' box='+tag+' cr='+(rangeText||'none')+
+                ' next='+next+' ready='+(self.readyFired?1:0)+
+                ' want='+(self.requestedStart==null?'?':self.requestedStart));
           /* A pre-ready jump landed on the moov (moov-at-end file). Remember
              the parsed tail so the post-ready sequential fetch neither
              re-downloads it nor runs past it. */
-          if(self.readyFired&&start>0) self.parsedTail={start:start,end:start+buf.byteLength};
+          if(self.readyFired&&start>0){
+            self.parsedTail={start:start,end:start+buf.byteLength};
+            trace('engine parsedTail armed @'+self.parsedTail.start+'-'+self.parsedTail.end+
+                  ' (total='+(self.totalBytes==null?'?':self.totalBytes)+')');
+          }
         }
         if(self.dead||gen!==self.fetchGen)return;
         if(buf.byteLength<CHUNK){self.finish(gen);return;}
@@ -365,7 +384,11 @@
              and make the bogus-tail case harmless — skipping bytes that are
              genuinely already parsed. */
           if(self.parsedTail&&nextOff>=self.parsedTail.start&&nextOff<self.parsedTail.end){
-            if(self.parsedTail.end>=(self.totalBytes||Infinity)){self.finish(gen);return;}
+            if(self.parsedTail.end>=(self.totalBytes||Infinity)){
+              trace('engine finish: parsedTail reaches EOF @'+self.parsedTail.end);
+              self.finish(gen);return;
+            }
+            trace('engine skip parsedTail: '+nextOff+' → '+self.parsedTail.end);
             nextOff=self.parsedTail.end;
           }
           self.fetchOffset=nextOff;
@@ -436,6 +459,9 @@
        real fetch failure (pump() takes the next generation below). */
     this.fetchGen++;
     if(this.inflight){try{this.inflight.abort()}catch(e){}this.inflight=null;}
+    trace('engine reposition: dropping parsedTail='+
+          (this.parsedTail?this.parsedTail.start+'-'+this.parsedTail.end:'none')+
+          ' ready='+(this.readyFired?1:0));
     this.resetExtraction();
     this.releaseConsumed();
     var seek;try{seek=this.mp4.seek(Math.max(0,timeSec),true)}catch(e){trace('engine seek failed: '+e);return;}
