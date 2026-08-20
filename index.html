@@ -442,11 +442,11 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-20.2"></script>
-<script src="mp4box.all.min.js?v=2026-08-20.2"></script>
+<script src="tv-polyfills.js?v=2026-08-20.3"></script>
+<script src="mp4box.all.min.js?v=2026-08-20.3"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-20.2"></script>
+<script src="tv-mse.js?v=2026-08-20.3"></script>
 <script>
 (function () {
   "use strict";
@@ -555,7 +555,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-20.2";
+  window.RECEIVER_VERSION = "2026-08-20.3";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1219,6 +1219,24 @@
     };
   }
   var remoteRecoveries = 0, remoteRetryTimer = null;
+
+  /// What actually failed, in one line: hls.js's own label, the HTTP status when
+  /// there was one, and the tail of the URL. A browser gives page JS no way to
+  /// distinguish a CORS block from a network failure — both arrive as status 0 —
+  /// so that is said explicitly rather than guessed at.
+  function describeLoadError(data) {
+    var parts = [data.details || data.type || "unknown"];
+    var status = (data.response && data.response.code) || 0;
+    if (status) parts.push("status " + status);
+    else parts.push("no status (blocked, or the connection dropped)");
+    var url = (data.frag && data.frag.url) || data.url || "";
+    if (url) {
+      // The tail only: these URLs carry a token.
+      var cut = url.split("?")[0];
+      parts.push("…" + cut.slice(-58));
+    }
+    return parts.join(" · ");
+  }
   var stallTimer = null;
   function clearStall() { if (stallTimer) { clearInterval(stallTimer); stallTimer = null; } }
   /* Playback finished, or the sender stopped casting: the connection is still
@@ -1584,6 +1602,13 @@
       remoteRecoveries = 0;
       hls.loadSource(m.url);
       hls.attachMedia(v);
+      if (isRemote && window.Hls.Events.ERROR) {
+        hls.on(window.Hls.Events.ERROR, function (evt, data) {
+          if (!data || data.fatal) return;   // fatal ones are handled below
+          if (data.type !== window.Hls.ErrorTypes.NETWORK_ERROR) return;
+          trace("remote load trouble (recovered): " + describeLoadError(data));
+        });
+      }
       hls.on(window.Hls.Events.FRAG_BUFFERED, function () {
         // Progress means the transcoder caught up: give a later seek its own
         // full budget instead of an exhausted one, and clear the notice.
@@ -1642,6 +1667,7 @@
         if (isRemote && data.type === window.Hls.ErrorTypes.NETWORK_ERROR &&
             remoteRecoveries < 40) {
           remoteRecoveries++;
+          trace("remote retry #" + remoteRecoveries + " " + describeLoadError(data));
           setStatus("Waiting for the server…",
                     "It hasn’t converted this part yet");
           if (remoteRetryTimer) clearTimeout(remoteRetryTimer);
@@ -1657,7 +1683,12 @@
           playbackError("This browser can’t decode this format" +
                         (codec ? ": " + codecName(codec) : "") + ".");
         } else {
-          playbackError("Playback failed (" + (data.details || data.type || "unknown") + ").");
+          // Name the request. "Playback failed (fragLoadError)" is a dead end
+          // from the sofa AND in the logs: a browser reports a blocked
+          // cross-origin fetch, a 404 for a segment the server has not written
+          // yet, and a dropped connection identically, and they need different
+          // answers. The URL and status are the whole diagnosis.
+          playbackError("Playback failed: " + describeLoadError(data));
         }
       });
       return;
