@@ -442,11 +442,11 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-20.3"></script>
-<script src="mp4box.all.min.js?v=2026-08-20.3"></script>
+<script src="tv-polyfills.js?v=2026-08-20.4"></script>
+<script src="mp4box.all.min.js?v=2026-08-20.4"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-20.3"></script>
+<script src="tv-mse.js?v=2026-08-20.4"></script>
 <script>
 (function () {
   "use strict";
@@ -555,10 +555,41 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-20.3";
+  window.RECEIVER_VERSION = "2026-08-20.4";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
+
+  // Reload once if this page is stale.
+  //
+  // The host serves index.html with `Cache-Control: max-age=600` and that is not
+  // configurable (GitHub Pages), so a viewer can sit on a ten-minute-old
+  // receiver — including one whose bug was just fixed. Worse for diagnosis: the
+  // version this page reports to the sender then lands in the phone's log as
+  // fact, and it has already sent me chasing a bug in a build that was no
+  // longer deployed.
+  //
+  // So ask the origin what the current version is, bypassing the cache, and
+  // reload if it differs. Once per tab (sessionStorage), so a wrong answer can
+  // never become a reload loop; the #code fragment survives a reload, so
+  // pairing is unaffected.
+  (function () {
+    if (!window.fetch || !window.sessionStorage) return;
+    try { if (sessionStorage.getItem("selfUpdated")) return; } catch (e) { return; }
+    fetch(location.pathname + "?probe=" + new Date().getTime(), { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (text) {
+        if (!text) return;
+        // Built from parts on purpose: the deploy script reads the version out
+        // of this file with a `sed` for that exact literal, and a second
+        // occurrence here would give it two answers.
+        var found = new RegExp("RECEIVER_" + 'VERSION = "([^"]+)"').exec(text);
+        if (!found || found[1] === window.RECEIVER_VERSION) return;
+        try { sessionStorage.setItem("selfUpdated", found[1]); } catch (e) {}
+        location.reload();
+      })
+      .catch(function () {});
+  })();
   window.PLEXCAST_TRACE = [];
   function trace(s) {
     window.PLEXCAST_TRACE.push(Math.round(performance.now()/1000) + "s " + s);
