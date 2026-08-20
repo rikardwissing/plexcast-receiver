@@ -442,11 +442,11 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-20.1"></script>
-<script src="mp4box.all.min.js?v=2026-08-20.1"></script>
+<script src="tv-polyfills.js?v=2026-08-20.2"></script>
+<script src="mp4box.all.min.js?v=2026-08-20.2"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-20.1"></script>
+<script src="tv-mse.js?v=2026-08-20.2"></script>
 <script>
 (function () {
   "use strict";
@@ -555,7 +555,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-20.1";
+  window.RECEIVER_VERSION = "2026-08-20.2";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1202,6 +1202,23 @@
   };
 
   var hls = null;
+  // How patient to be with a server that is still converting. A segment it has
+  // not reached answers 404, so the retry budget has to outlast the transcoder
+  // catching up — hls.js's defaults give up in a couple of seconds. The legacy
+  // key names are used deliberately: hls.js v1 still honours them, and they
+  // work across the versions this page has been pinned to.
+  function remoteHlsConfig() {
+    return {
+      enableWorker: false,
+      fragLoadingMaxRetry: 8,
+      fragLoadingRetryDelay: 1000,
+      fragLoadingMaxRetryTimeout: 8000,
+      levelLoadingMaxRetry: 8,
+      levelLoadingRetryDelay: 1000,
+      manifestLoadingMaxRetry: 4
+    };
+  }
+  var remoteRecoveries = 0, remoteRetryTimer = null;
   var stallTimer = null;
   function clearStall() { if (stallTimer) { clearInterval(stallTimer); stallTimer = null; } }
   /* Playback finished, or the sender stopped casting: the connection is still
@@ -1210,6 +1227,7 @@
      spinner means "working on it", so it stops here. */
   function stopMedia() {
     clearStall();
+    if (remoteRetryTimer) { clearTimeout(remoteRetryTimer); remoteRetryTimer = null; }
     if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
     teardownEngine();
     clearSubtitles();
@@ -1227,6 +1245,7 @@
     // ignore it so the frozen frame + overlay stay put instead of a "can't play" card.
     if (reconnecting) return;
     clearStall();
+    if (remoteRetryTimer) { clearTimeout(remoteRetryTimer); remoteRetryTimer = null; }
     if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
     teardownEngine();
     clearSubtitles();
@@ -1560,10 +1579,19 @@
     if (isHls) {
       if (!window.Hls || !window.Hls.isSupported()) { fail("This browser can’t play the stream (no MSE)."); return; }
       hls = isRemote
-        ? new window.Hls({ enableWorker: false })
+        ? new window.Hls(remoteHlsConfig())
         : new window.Hls({ loader: DataChannelLoader, enableWorker: false });
+      remoteRecoveries = 0;
       hls.loadSource(m.url);
       hls.attachMedia(v);
+      hls.on(window.Hls.Events.FRAG_BUFFERED, function () {
+        // Progress means the transcoder caught up: give a later seek its own
+        // full budget instead of an exhausted one, and clear the notice.
+        if (remoteRecoveries > 0) {
+          remoteRecoveries = 0;
+          setStatus("", "");
+        }
+      });
       hls.on(window.Hls.Events.MANIFEST_PARSED, function (evt, data) {
         // Check what the manifest declares BEFORE playing — an unsupported
         // codec (E-AC-3 audio is the classic) otherwise loads forever. Codecs
@@ -1602,6 +1630,28 @@
       });
       hls.on(window.Hls.Events.ERROR, function (evt, data) {
         if (!data || !data.fatal) return;
+        // A NETWORK error on a remote stream usually is not a failure at all:
+        // the server is transcoding as we watch, so its playlist grows, and a
+        // seek past the point it has reached asks for a segment that does not
+        // exist YET. hls.js sees 404, exhausts its retries and calls it fatal —
+        // which is how skipping around ended in fragLoadError.
+        //
+        // So wait and pick up again, rather than giving up on the film. Bounded,
+        // and it says what it is waiting for: a silent spinner and a dead player
+        // look identical.
+        if (isRemote && data.type === window.Hls.ErrorTypes.NETWORK_ERROR &&
+            remoteRecoveries < 40) {
+          remoteRecoveries++;
+          setStatus("Waiting for the server…",
+                    "It hasn’t converted this part yet");
+          if (remoteRetryTimer) clearTimeout(remoteRetryTimer);
+          remoteRetryTimer = setTimeout(function () {
+            remoteRetryTimer = null;
+            if (!hls) return;
+            try { hls.startLoad(); } catch (e) {}
+          }, 1500);
+          return;
+        }
         var codec = (data.mimeType || "").replace(/^.*codecs="?([^";]+)"?.*$/, "$1");
         if (/bufferAddCodecError|bufferIncompatibleCodecsError|manifestIncompatibleCodecsError/.test(data.details || "")) {
           playbackError("This browser can’t decode this format" +
