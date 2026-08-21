@@ -442,11 +442,11 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-21.14"></script>
-<script src="mp4box.all.min.js?v=2026-08-21.14"></script>
+<script src="tv-polyfills.js?v=2026-08-21.15"></script>
+<script src="mp4box.all.min.js?v=2026-08-21.15"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-21.14"></script>
+<script src="tv-mse.js?v=2026-08-21.15"></script>
 <script>
 (function () {
   "use strict";
@@ -555,7 +555,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-21.14";
+  window.RECEIVER_VERSION = "2026-08-21.15";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1527,6 +1527,50 @@
   // URL, and add a <track>; the sender's subtitleTrack message toggles which one
   // shows (by app typeIndex, -1 = off). Works on both the MSE and plain paths.
   var subBlobs = [];
+  // Sidecar originals and the measured clock offset for the CURRENT load. On a
+  // remote HLS load the element clock is sourceTime + lead − initPTS (see the
+  // synth notes below), and sidecar cues are source-time too — so once both
+  // halves are measured, every sidecar is re-timed by the same offset the
+  // synthesized track gets. Originals are kept so a re-shift is idempotent.
+  var sidecarBodies = {};
+  var subClockOffset = null;
+  function shiftTimestamp(ts, offset) {
+    var parts = ts.split(":");
+    var seconds = 0;
+    for (var i = 0; i < parts.length; i++) seconds = seconds * 60 + parseFloat(parts[i]);
+    seconds = Math.max(0, seconds + offset);
+    var h = Math.floor(seconds / 3600), mn = Math.floor((seconds % 3600) / 60);
+    var sc = (seconds % 60).toFixed(3);
+    if (sc.length < 6) sc = "0" + sc;
+    return (h < 10 ? "0" + h : h) + ":" + (mn < 10 ? "0" + mn : mn) + ":" + sc;
+  }
+  function shiftVttBody(body, offset) {
+    return body.split("\n").map(function (line) {
+      if (line.indexOf("-->") < 0) return line;
+      return line.replace(/([\d:.]+)(\s*-->\s*)([\d:.]+)/, function (_, a, arrow, b) {
+        return shiftTimestamp(a, offset) + arrow + shiftTimestamp(b, offset);
+      });
+    }).join("\n");
+  }
+  // Re-time the attached sidecars once the load's clock offset is measured.
+  // The src swap reloads the cues; label, language and mode all survive it.
+  function retimeSidecarTracks() {
+    if (subClockOffset == null || Math.abs(subClockOffset) <= 0.05) return;
+    var tracks = v.querySelectorAll("track");
+    if (!tracks.length) return;
+    beginSubMutation();
+    var shifted = 0;
+    for (var i = 0; i < tracks.length; i++) {
+      var ti = tracks[i].getAttribute("data-typeindex");
+      if (!(ti in sidecarBodies)) continue;
+      var url = URL.createObjectURL(
+        new Blob([shiftVttBody(sidecarBodies[ti], subClockOffset)], { type: "text/vtt" }));
+      subBlobs.push(url);
+      tracks[i].src = url;
+      shifted++;
+    }
+    if (shifted) trace("sidecars re-timed by " + subClockOffset.toFixed(2) + "s (" + shifted + " track(s))");
+  }
   // The subtitle the sender last picked (app typeIndex, -1 = off). Sticky so a
   // subtitleTrack message that lands BEFORE the async <track>s are built (iOS
   // carries a subtitle choice into the load) still takes effect once they load.
@@ -1550,6 +1594,8 @@
     for (var i = 0; i < tracks.length; i++) v.removeChild(tracks[i]);
     for (var j = 0; j < subBlobs.length; j++) { try { URL.revokeObjectURL(subBlobs[j]); } catch (e) {} }
     subBlobs = [];
+    sidecarBodies = {};
+    subClockOffset = null;
   }
   function applySubtitles(list) {
     clearSubtitles();
@@ -1557,7 +1603,11 @@
     list.forEach(function (s) {
       fetchOverChannel(s.url, {}).then(function (r) {
         beginSubMutation();   // extend the guard as each async track lands
-        var url = URL.createObjectURL(new Blob([r.data], { type: "text/vtt" }));
+        var original = (typeof r.data === "string") ? r.data : new TextDecoder().decode(r.data);
+        sidecarBodies[String(s.typeIndex)] = original;
+        var body = (subClockOffset != null && Math.abs(subClockOffset) > 0.05)
+          ? shiftVttBody(original, subClockOffset) : original;
+        var url = URL.createObjectURL(new Blob([body], { type: "text/vtt" }));
         subBlobs.push(url);
         var t = document.createElement("track");
         t.kind = "subtitles";
@@ -1665,6 +1715,7 @@
               if (synthInitPTS !== seconds) {
                 synthInitPTS = seconds;
                 rebuildSynthTrack();   // re-time the cues to this session's clock
+                noteSubClock();        // …and the sidecars, which ride the same clock
               }
             }
           });
@@ -1727,15 +1778,10 @@
       // ten seconds; applying nothing left the per-session drift. Both halves
       // together are exact.
       var synthLead = null, synthInitPTS = null;
-      function shiftTimestamp(ts, offset) {
-        var parts = ts.split(":");
-        var seconds = 0;
-        for (var i = 0; i < parts.length; i++) seconds = seconds * 60 + parseFloat(parts[i]);
-        seconds = Math.max(0, seconds + offset);
-        var h = Math.floor(seconds / 3600), mn = Math.floor((seconds % 3600) / 60);
-        var sc = (seconds % 60).toFixed(3);
-        if (sc.length < 6) sc = "0" + sc;
-        return (h < 10 ? "0" + h : h) + ":" + (mn < 10 ? "0" + mn : mn) + ":" + sc;
+      function noteSubClock() {
+        if (synthLead == null || synthInitPTS == null) return;
+        subClockOffset = synthLead - synthInitPTS;
+        retimeSidecarTracks();
       }
       function stripVttHeaders(text) {
         var map = /X-TIMESTAMP-MAP=LOCAL:([\d:.]+),MPEGTS:(\d+)/.exec(text);
@@ -1759,14 +1805,7 @@
         // shift is worse than the drift.
         if (synthLead != null && synthInitPTS != null) {
           var offset = synthLead - synthInitPTS;
-          if (Math.abs(offset) > 0.05) {
-            body = body.split("\n").map(function (line) {
-              if (line.indexOf("-->") < 0) return line;
-              return line.replace(/([\d:.]+)(\s*-->\s*)([\d:.]+)/, function (_, a, arrow, b) {
-                return shiftTimestamp(a, offset) + arrow + shiftTimestamp(b, offset);
-              });
-            }).join("\n");
-          }
+          if (Math.abs(offset) > 0.05) body = shiftVttBody(body, offset);
         }
         beginSubMutation();
         if (synthTrackEl) {
@@ -1816,6 +1855,30 @@
       if (isRemote && renditionTI != null && !remoteUsesSidecars) {
         hls.on(window.Hls.Events.SUBTITLE_TRACKS_UPDATED, function () {
           if (!synthTimer) { synthTimer = setInterval(refreshSynth, 8000); refreshSynth(); }
+        });
+      }
+      // A sidecar-driven load never fetches VTT segments, so the lead has to
+      // be measured separately: one segment of the manifest's own rendition
+      // when the load carries one, else the server's measured constant (Plex
+      // opens every transcode at PTS 10s) — traced, so a server that breaks
+      // the assumption shows itself in a pulled log.
+      if (isRemote && remoteUsesSidecars) {
+        hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
+          if (synthLead != null) return;
+          if (hls.subtitleTracks && hls.subtitleTracks.length) {
+            var plUrl = hls.subtitleTracks[0].url;
+            fetch(plUrl).then(function (r) { return r.text(); }).then(function (pl) {
+              if (synthLead != null) return;
+              var segs = pl.split("\n").filter(function (l) { return l && l[0] !== "#"; });
+              if (!segs.length) return;
+              return fetch(new URL(segs[0], plUrl).href).then(function (r) { return r.text(); })
+                .then(function (t) { stripVttHeaders(t); noteSubClock(); });
+            }).catch(function () {});
+          } else {
+            synthLead = 10;
+            trace("sub clock: no rendition to measure the lead - assuming 10s");
+            noteSubClock();
+          }
         });
       }
       // The FULL subtitle catalog, so the browser's own CC menu can offer every
