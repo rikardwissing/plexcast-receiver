@@ -442,11 +442,11 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-21.7"></script>
-<script src="mp4box.all.min.js?v=2026-08-21.7"></script>
+<script src="tv-polyfills.js?v=2026-08-21.8"></script>
+<script src="mp4box.all.min.js?v=2026-08-21.8"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-21.7"></script>
+<script src="tv-mse.js?v=2026-08-21.8"></script>
 <script>
 (function () {
   "use strict";
@@ -555,7 +555,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-21.7";
+  window.RECEIVER_VERSION = "2026-08-21.8";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1663,62 +1663,70 @@
       // going "showing" as the user deselecting its track, and its own track
       // knocks the sidecar's mode about). One mechanism per load.
       var remoteUsesSidecars = isRemote && (m.subs || []).length > 0;
-      // ATTACH them. Every applySubtitles call in this function sits after the
-      // HLS branch's return, so an HLS load declared sidecars, suppressed the
-      // rendition in their favour — and then never attached a single <track>.
-      // The picks that followed were switching modes on tracks that did not
-      // exist, which is the quietest possible way to do nothing.
       if (remoteUsesSidecars) applySubtitles(m.subs);
-      function enableRemoteSubtitle(why) {
-        if (!isRemote || !hls) return;
-        if (remoteUsesSidecars) {
-          try { hls.subtitleDisplay = false; } catch (e) {}
-          return;
-        }
-        try {
-          var n = (hls.subtitleTracks || []).length;
-          if (!n) { trace("enableSub(" + why + "): no tracks yet"); return; }
-          hls.subtitleDisplay = true;
-          if (hls.subtitleTrack < 0) hls.subtitleTrack = 0;
-          // Read BACK, because the field log showed sel=-1 while disp=true and
-          // a track existed — either this never ran, or the setter's work was
-          // reverted. The readback plus the re-assert loop below tells which.
-          trace("enableSub(" + why + "): tracks=" + n +
-                " sel now=" + hls.subtitleTrack + " disp=" + hls.subtitleDisplay);
-        } catch (e) { trace("enableSub(" + why + ") threw: " + e); }
+      // Remote subtitles go through ONE mechanism: the <track> machinery.
+      // hls.js's own subtitle selection on these live streams was measured
+      // knocking every set back to -1 within seconds, with no error event —
+      // four harnesses failed to reproduce it, so the receiver stopped
+      // depending on it. External subtitles arrive as complete sidecars from
+      // the sender; an EMBEDDED one exists only as the manifest rendition, so
+      // the receiver fetches the rendition's WebVTT segments itself (cue
+      // times are absolute — measured — so they simply concatenate) and
+      // synthesizes the same kind of <track> the sidecars use.
+      var renditionTI = (typeof m.renditionTypeIndex === "number") ? m.renditionTypeIndex : null;
+      if (isRemote) {
+        try { hls.subtitleDisplay = false; hls.subtitleTrack = -1; } catch (e) {}
       }
-      // Re-assert for the first while. If the selection is being knocked back
-      // to -1 by hls's native-track sync (it reads a disabled TextTrack as the
-      // user turning subtitles off), a one-time race loses but a re-assert
-      // wins — and if something actively fights, the traces show ping-pong,
-      // which is a diagnosis in itself.
-      var reassertCount = 0;
-      var reassertTimer = setInterval(function () {
-        if (!hls || !isRemote) { clearInterval(reassertTimer); return; }
-        if (++reassertCount > 15) { clearInterval(reassertTimer); return; }
-        try {
-          if ((hls.subtitleTracks || []).length && hls.subtitleTrack < 0) {
-            enableRemoteSubtitle("reassert#" + reassertCount);
-          }
-          // The failure that read as "subtitles don't work" was NOT the
-          // enabling — readbacks show sel=0 every time — it was starvation:
-          // a track change restarts the server's encoder at the viewer's
-          // position, and its subtitle segments take a little while to exist.
-          // Every pick made inside that window kills the encoder and starts
-          // the wait over, so the one thing that helps is SAYING it. cues==0
-          // with a selected track is exactly that state.
-          if (!remoteUsesSidecars && hls.subtitleTrack >= 0 && reassertCount >= 2) {
-            var track = null;
-            for (var ti = 0; ti < v.textTracks.length; ti++) {
-              if (v.textTracks[ti].mode === "showing") { track = v.textTracks[ti]; break; }
-            }
-            if (track && (!track.cues || !track.cues.length)) {
-              setStatus("Subtitles are on their way…",
-                        "The server is converting this part — give it a moment");
-            }
-          }
-        } catch (e) {}
-      }, 2000);
+      function stripVttHeaders(text) {
+        return text.split("\n").filter(function (line) {
+          return !/^WEBVTT/.test(line) && !/^X-TIMESTAMP-MAP/.test(line);
+        }).join("\n").replace(/^\s+/, "").replace(/\s+$/, "");
+      }
+      var synthSegs = {}, synthTrackEl = null, synthTimer = null, synthGen = m.gen || 0;
+      function rebuildSynthTrack() {
+        var keys = Object.keys(synthSegs).map(Number).sort(function (a, b) { return a - b; });
+        var parts = [];
+        for (var k = 0; k < keys.length; k++) { if (synthSegs[keys[k]]) parts.push(synthSegs[keys[k]]); }
+        if (!parts.length) return;
+        var body = "WEBVTT\n\n" + parts.join("\n\n") + "\n";
+        beginSubMutation();
+        if (synthTrackEl) { try { v.removeChild(synthTrackEl); } catch (e) {} }
+        var t = document.createElement("track");
+        t.kind = "subtitles";
+        t.label = "Subtitles";
+        t.src = URL.createObjectURL(new Blob([body], { type: "text/vtt" }));
+        t.setAttribute("data-typeindex", String(renditionTI));
+        v.appendChild(t);
+        synthTrackEl = t;
+        try { t.track.mode = trackMode(t); } catch (e) {}
+        trace("synth track rebuilt: " + parts.length + " seg(s), mode=" + t.track.mode);
+      }
+      function refreshSynth() {
+        if (currentGen !== synthGen || !hls) { clearInterval(synthTimer); return; }
+        if (!hls.subtitleTracks || !hls.subtitleTracks.length) return;
+        var plUrl = hls.subtitleTracks[0].url;
+        fetch(plUrl).then(function (r) { return r.text(); }).then(function (pl) {
+          var segs = pl.split("\n").filter(function (l) { return l && l[0] !== "#"; });
+          // A window around the playhead: segments materialise as the encoder
+          // reaches them, so a 404 now is a hit on the next refresh.
+          var here = Math.max(0, Math.floor((v.currentTime || m.startTime || 0) / 10) - 3);
+          var last = Math.min(segs.length, here + 42);
+          var jobs = [];
+          for (var i = here; i < last; i++) (function (i) {
+            if (synthSegs[i] != null) return;
+            jobs.push(fetch(new URL(segs[i], plUrl).href).then(function (r) {
+              if (!r.ok) throw 0;
+              return r.text();
+            }).then(function (t) { synthSegs[i] = stripVttHeaders(t); }).catch(function () {}));
+          })(i);
+          if (jobs.length) Promise.all(jobs).then(rebuildSynthTrack);
+        }).catch(function () {});
+      }
+      if (isRemote && renditionTI != null && !remoteUsesSidecars) {
+        hls.on(window.Hls.Events.SUBTITLE_TRACKS_UPDATED, function () {
+          if (!synthTimer) { synthTimer = setInterval(refreshSynth, 8000); refreshSynth(); }
+        });
+      }
       // Eyes. An identical harness shows the rendition working, the live page
       // does not, and reading the code has not found the difference — so the
       // page reports its own subtitle state through the channel into the
@@ -1747,13 +1755,6 @@
         if (!hls) { clearInterval(subStateTimer); return; }
         traceSubtitleState("tick");
       }, 6000);
-      if (window.Hls.Events.SUBTITLE_TRACKS_UPDATED) {
-        hls.on(window.Hls.Events.SUBTITLE_TRACKS_UPDATED, function () {
-          enableRemoteSubtitle("tracksUpdated");
-        });
-      } else if (isRemote) {
-        trace("SUBTITLE_TRACKS_UPDATED missing from this hls.js");
-      }
       hls.on(window.Hls.Events.FRAG_BUFFERED, function () {
         // Progress means the transcoder caught up: give a later seek its own
         // full budget instead of an exhausted one, and clear the notice.
@@ -1795,7 +1796,6 @@
           return;
         }
         if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
-        enableRemoteSubtitle("manifest");
         traceSubtitleState("manifest");
         armStall();
         play();
