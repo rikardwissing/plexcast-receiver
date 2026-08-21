@@ -442,11 +442,11 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-21.8"></script>
-<script src="mp4box.all.min.js?v=2026-08-21.8"></script>
+<script src="tv-polyfills.js?v=2026-08-21.9"></script>
+<script src="mp4box.all.min.js?v=2026-08-21.9"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-21.8"></script>
+<script src="tv-mse.js?v=2026-08-21.9"></script>
 <script>
 (function () {
   "use strict";
@@ -555,7 +555,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-21.8";
+  window.RECEIVER_VERSION = "2026-08-21.9";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1677,9 +1677,35 @@
       if (isRemote) {
         try { hls.subtitleDisplay = false; hls.subtitleTrack = -1; } catch (e) {}
       }
+      // Per-segment header handling, and the MAP is not junk to strip: it says
+      // how far the media timeline leads the cue times. Plex transports start
+      // at PTS 10s (MPEGTS:900000/90000), and dropping the map made every
+      // synthesized cue fire ten seconds early. Parse it, shift the cues.
+      function shiftTimestamp(ts, offset) {
+        var parts = ts.split(":");
+        var seconds = 0;
+        for (var i = 0; i < parts.length; i++) seconds = seconds * 60 + parseFloat(parts[i]);
+        seconds = Math.max(0, seconds + offset);
+        var h = Math.floor(seconds / 3600), mn = Math.floor((seconds % 3600) / 60);
+        var sc = (seconds % 60).toFixed(3);
+        if (sc.length < 6) sc = "0" + sc;
+        return (h < 10 ? "0" + h : h) + ":" + (mn < 10 ? "0" + mn : mn) + ":" + sc;
+      }
       function stripVttHeaders(text) {
+        var offset = 0;
+        var map = /X-TIMESTAMP-MAP=LOCAL:([\d:.]+),MPEGTS:(\d+)/.exec(text);
+        if (map) {
+          var local = 0, lp = map[1].split(":");
+          for (var i = 0; i < lp.length; i++) local = local * 60 + parseFloat(lp[i]);
+          offset = map[2] / 90000 - local;
+        }
         return text.split("\n").filter(function (line) {
           return !/^WEBVTT/.test(line) && !/^X-TIMESTAMP-MAP/.test(line);
+        }).map(function (line) {
+          if (line.indexOf("-->") < 0 || !offset) return line;
+          return line.replace(/([\d:.]+)(\s*-->\s*)([\d:.]+)/, function (_, a, arrow, b) {
+            return shiftTimestamp(a, offset) + arrow + shiftTimestamp(b, offset);
+          });
         }).join("\n").replace(/^\s+/, "").replace(/\s+$/, "");
       }
       var synthSegs = {}, synthTrackEl = null, synthTimer = null, synthGen = m.gen || 0;
@@ -1726,6 +1752,26 @@
         hls.on(window.Hls.Events.SUBTITLE_TRACKS_UPDATED, function () {
           if (!synthTimer) { synthTimer = setInterval(refreshSynth, 8000); refreshSynth(); }
         });
+      }
+      // The FULL subtitle catalog, so the browser's own CC menu can offer every
+      // track. Sidecars and the synthesized rendition carry real cues; the
+      // other embedded tracks get EMPTY placeholder <track>s — picking one
+      // fires the ordinary textTracks change → pickSubtitle → the sender
+      // restarts the stream into that track, exactly as a phone pick does.
+      if (isRemote && m.subCatalog && m.subCatalog.length) {
+        beginSubMutation();
+        for (var ci = 0; ci < m.subCatalog.length; ci++) (function (entry) {
+          if (entry.typeIndex === renditionTI) return;              // the synth covers it
+          var have = v.querySelector('track[data-typeindex="' + entry.typeIndex + '"]');
+          if (have || entry.external) return;                       // sidecars cover externals
+          var t = document.createElement("track");
+          t.kind = "subtitles";
+          t.label = entry.label || "Subtitles";
+          t.src = URL.createObjectURL(new Blob(["WEBVTT\n"], { type: "text/vtt" }));
+          t.setAttribute("data-typeindex", String(entry.typeIndex));
+          v.appendChild(t);
+          try { t.track.mode = trackMode(t); } catch (e) {}
+        })(m.subCatalog[ci]);
       }
       // Eyes. An identical harness shows the rendition working, the live page
       // does not, and reading the code has not found the difference — so the
