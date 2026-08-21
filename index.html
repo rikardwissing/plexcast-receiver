@@ -442,11 +442,11 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-21.4"></script>
-<script src="mp4box.all.min.js?v=2026-08-21.4"></script>
+<script src="tv-polyfills.js?v=2026-08-21.5"></script>
+<script src="mp4box.all.min.js?v=2026-08-21.5"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-21.4"></script>
+<script src="tv-mse.js?v=2026-08-21.5"></script>
 <script>
 (function () {
   "use strict";
@@ -555,7 +555,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-21.4";
+  window.RECEIVER_VERSION = "2026-08-21.5";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1646,8 +1646,19 @@
       // TURN IT ON. Nothing else would: the sidecar machinery matches its own
       // sub<N> names, and this rendition is the server's ("vtt-base"), so
       // every subtitle on a remote cast silently stayed off.
+      // Sidecars win outright. When the load carries them they are COMPLETE
+      // files — no encoder to wait for, instant switching through the <track>
+      // machinery — and the manifest rendition must then stay suppressed:
+      // both at once was measured to zero out both (hls.js reads a sidecar
+      // going "showing" as the user deselecting its track, and its own track
+      // knocks the sidecar's mode about). One mechanism per load.
+      var remoteUsesSidecars = isRemote && (m.subs || []).length > 0;
       function enableRemoteSubtitle(why) {
         if (!isRemote || !hls) return;
+        if (remoteUsesSidecars) {
+          try { hls.subtitleDisplay = false; } catch (e) {}
+          return;
+        }
         try {
           var n = (hls.subtitleTracks || []).length;
           if (!n) { trace("enableSub(" + why + "): no tracks yet"); return; }
@@ -1680,7 +1691,7 @@
           // Every pick made inside that window kills the encoder and starts
           // the wait over, so the one thing that helps is SAYING it. cues==0
           // with a selected track is exactly that state.
-          if (hls.subtitleTrack >= 0 && reassertCount >= 2) {
+          if (!remoteUsesSidecars && hls.subtitleTrack >= 0 && reassertCount >= 2) {
             var track = null;
             for (var ti = 0; ti < v.textTracks.length; ti++) {
               if (v.textTracks[ti].mode === "showing") { track = v.textTracks[ti]; break; }
