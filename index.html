@@ -442,12 +442,12 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-24.18"></script>
-<script src="mp4box.all.min.js?v=2026-08-24.18"></script>
+<script src="tv-polyfills.js?v=2026-08-24.19"></script>
+<script src="mp4box.all.min.js?v=2026-08-24.19"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-24.18"></script>
-<script src="mkv-engine.js?v=2026-08-24.18"></script>
+<script src="tv-mse.js?v=2026-08-24.19"></script>
+<script src="mkv-engine.js?v=2026-08-24.19"></script>
 <script>
 (function () {
   "use strict";
@@ -556,7 +556,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-24.18";
+  window.RECEIVER_VERSION = "2026-08-24.19";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1083,6 +1083,18 @@
         // 4.46 MB that gates first frame starts moving at load time instead of
         // after two round trips of uplink latency. Keyed by generation: a swap
         // supersedes it, and the sender stops sending the moment it does.
+        //
+        // A re-announce of a push already held COMPLETE (the sender re-pushes
+        // on every sendLoad — the track-prep reload included) must keep the
+        // data: resetting done=false while the second push races or dies left
+        // pushedMoov() answering {pending:true} forever — the long poster
+        // loading of 2026-08-24.
+        if (initMoov && initMoov.done && !initMoov.failed &&
+            initMoov.gen === obj.gen && initMoov.start === obj.start &&
+            initMoov.len === obj.len) {
+          trace("moov push re-announced: gen " + obj.gen + " — keeping the completed copy");
+          break;
+        }
         initMoov = { gen: obj.gen, id: obj.id, start: obj.start, len: obj.len,
                      chunks: [], got: 0, done: false, failed: false };
         trace("moov push announced: gen " + obj.gen + " @" + obj.start + " len=" + obj.len);
@@ -1684,6 +1696,12 @@
   }
 
   function loadMedia(m) {
+    // Eyes: a load nobody can account for (the 2026-08-24 mid-play reset to
+    // t=0) should name itself in the sender's log.
+    trace("load: gen=" + (m.gen || 0) + " remote=" + (m.remote === true) +
+          " mkv=" + !!m.mkvEngine + " mse=" + !!m.mse +
+          " start=" + (m.startTime || 0) +
+          " audio=" + (m.audioTypeIndex != null ? m.audioTypeIndex : "-"));
     stopMedia();                 // pauses the old media → a final OLD-gen status
     panel.querySelector(".spinner").style.display = "";   // buffering again
     stopped = false;             // a fresh load = active again (clears any prior stop)
