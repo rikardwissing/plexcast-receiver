@@ -442,12 +442,12 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-24.17"></script>
-<script src="mp4box.all.min.js?v=2026-08-24.17"></script>
+<script src="tv-polyfills.js?v=2026-08-24.18"></script>
+<script src="mp4box.all.min.js?v=2026-08-24.18"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-24.17"></script>
-<script src="mkv-engine.js?v=2026-08-24.17"></script>
+<script src="tv-mse.js?v=2026-08-24.18"></script>
+<script src="mkv-engine.js?v=2026-08-24.18"></script>
 <script>
 (function () {
   "use strict";
@@ -556,7 +556,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-24.17";
+  window.RECEIVER_VERSION = "2026-08-24.18";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1032,7 +1032,20 @@
           var ai = renditionIndex(hls.audioTracks, "audio", obj.typeIndex);
           if (ai >= 0) { try { hls.audioTrack = ai; } catch (e) {} }
         } else if (engine) {
-          try { engine.setAudioTrack(obj.typeIndex); } catch (e) {}
+          // Safari's pipeline rejects the MkvEngine's in-place buffer swap
+          // (decode error, field 2026-08-24) — reload at the live position
+          // instead, the same path the initial load takes. Everything else
+          // keeps the seamless swap.
+          if (currentMedia && currentMedia.mkvEngine &&
+              /apple/i.test(navigator.vendor || "")) {
+            var nm = {}, nk;
+            for (nk in currentMedia) if (Object.prototype.hasOwnProperty.call(currentMedia, nk)) nm[nk] = currentMedia[nk];
+            nm.audioTypeIndex = obj.typeIndex;
+            nm.startTime = v.currentTime || 0;
+            loadMedia(nm);
+          } else {
+            try { engine.setAudioTrack(obj.typeIndex); } catch (e) {}
+          }
         }
         break;
       case "subtitleTrack":
@@ -2043,7 +2056,11 @@
       v.src = engine.objectUrl;
       engine.onEngineFailed = function (reason) {
         trace("mkv engine failed: " + reason);
-        playbackError("This browser could not play the MKV stream.");
+        // A codec verdict is actionable — name it rather than blaming the MKV.
+        playbackError(/cannot decode/.test(String(reason))
+          ? "This browser " + String(reason).replace(/^this device\s*/, "") +
+            ". Convert the file (compatible audio) and cast again."
+          : "This browser could not play the MKV stream.");
       };
       v.addEventListener("loadedmetadata", function once() {
         v.removeEventListener("loadedmetadata", once);
@@ -2103,7 +2120,10 @@
       v.src = engine.objectUrl;
       engine.onEngineFailed = function (reason) {
         trace("mkv engine failed: " + reason);
-        playbackError("This browser could not play the MKV over the connection.");
+        playbackError(/cannot decode/.test(String(reason))
+          ? "This browser " + String(reason).replace(/^this device\s*/, "") +
+            ". Convert the file (compatible audio) and cast again."
+          : "This browser could not play the MKV over the connection.");
       };
       v.addEventListener("loadedmetadata", function once() {
         v.removeEventListener("loadedmetadata", once);
