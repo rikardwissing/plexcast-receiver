@@ -459,12 +459,12 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-24.23"></script>
-<script src="mp4box.all.min.js?v=2026-08-24.23"></script>
+<script src="tv-polyfills.js?v=2026-08-24.24"></script>
+<script src="mp4box.all.min.js?v=2026-08-24.24"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-24.23"></script>
-<script src="mkv-engine.js?v=2026-08-24.23"></script>
+<script src="tv-mse.js?v=2026-08-24.24"></script>
+<script src="mkv-engine.js?v=2026-08-24.24"></script>
 <script>
 (function () {
   "use strict";
@@ -573,7 +573,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-24.23";
+  window.RECEIVER_VERSION = "2026-08-24.24";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1427,15 +1427,19 @@
       if (now !== stallMark) { stallMark = now; stallSilentMs = 0; return; }
       stallSilentMs += STALL_TICK;
       if (stallSilentMs < STALL_GIVEUP) return;
+      // An engine whose fetches TIMED OUT is a SLOW server, not a dead one —
+      // never abort for that (Rikard's call 2026-08-24): the engine keeps
+      // retrying and the spinner keeps spinning for as long as it takes.
+      if (engine && engine.sawSlowFetch) {
+        trace("stall: " + (STALL_GIVEUP / 1000) + "s with a slow server — staying");
+        stallSilentMs = 0;
+        armStall();
+        return;
+      }
       clearStall();
       trace("stall: no progress for " + (STALL_GIVEUP / 1000) + "s (" + now + ")");
-      // An engine whose fetches TIMED OUT is not a dropped connection: the
-      // server answered instantly and then trickled the media (measured at
-      // 100KB/s while idle, 2026-08-24). Different problem, different words.
-      playbackError(engine && engine.sawSlowFetch
-        ? "The media server is answering, but delivering too slowly to stream right now. Check what else is using its connection."
-        : "Nothing arrived for " + (STALL_GIVEUP / 1000) +
-          " seconds — the connection may have dropped.");
+      playbackError("Nothing arrived for " + (STALL_GIVEUP / 1000) +
+                    " seconds — the connection may have dropped.");
     }, STALL_TICK);
   }
   v.addEventListener("loadeddata", clearStall);
@@ -1575,6 +1579,10 @@
   var bufferingHud = document.getElementById("buffering");
   var bufferingTimer = null;
   function bufferingShow() {
+    // Chromium draws its own centered throbber on a <video controls> that
+    // waits — ours beside it read as DOUBLE loaders (field 2026-08-24).
+    // Safari shows nothing, so ours stays for it.
+    if (/google/i.test(navigator.vendor || "")) return;
     if (bufferingTimer || bufferingHud.classList.contains("show")) return;
     bufferingTimer = setTimeout(function () {
       bufferingTimer = null;
@@ -2320,7 +2328,8 @@
     // Tag with the load generation: when a new load pauses the old media it
     // fires one last status carrying the OLD duration — the sender ignores any
     // status whose gen isn't the current load, so its loader doesn't vanish.
-    var s = { t: "status", gen: currentGen, position: v.currentTime || 0, duration: v.duration || 0, paused: v.paused };
+    var s = { t: "status", gen: currentGen, position: v.currentTime || 0, duration: v.duration || 0, paused: v.paused,
+              buffering: (!v.paused && v.readyState < 3) };
     if (extra) for (var k in extra) s[k] = extra[k];
     dc.send(JSON.stringify(s));
   }
