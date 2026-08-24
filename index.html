@@ -442,11 +442,12 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-21.15"></script>
-<script src="mp4box.all.min.js?v=2026-08-21.15"></script>
+<script src="tv-polyfills.js?v=2026-08-24.16"></script>
+<script src="mp4box.all.min.js?v=2026-08-24.16"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-21.15"></script>
+<script src="tv-mse.js?v=2026-08-24.16"></script>
+<script src="mkv-engine.js?v=2026-08-24.16"></script>
 <script>
 (function () {
   "use strict";
@@ -555,7 +556,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-21.15";
+  window.RECEIVER_VERSION = "2026-08-24.16";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -2021,6 +2022,38 @@
     // byte windows (a 2017 TV runs out of memory on a whole-file Blob) and it is
     // the only path that can switch audio tracks. The Service Worker route below
     // stays for engines without MediaSource/mp4box.
+    // A remote MKV stream (sender flagged {mkvEngine:true}): the MkvEngine
+    // demuxes the raw file straight off the media server by byte ranges. The
+    // Content-Range objection below never applied to it — unlike the
+    // MseEngine, it computes its own offsets and never reads that header —
+    // which is exactly why remote MKVs work on the Chromecast and LAN pages,
+    // and now here. Session-free: nothing anywhere transcodes.
+    if (isRemote && m.mkvEngine) {
+      if (!window.MediaSource || typeof window.MkvEngine === "undefined") {
+        fail("This browser can’t play MKVs (no MSE).");
+        return;
+      }
+      setStatus("Buffering…", "Streaming from the server");
+      teardownEngine();
+      engine = new window.MkvEngine(m.url, m.audioTypeIndex || 0, {
+        getTime: function () { return v.currentTime || 0; },
+        log: trace,
+        startAt: startTime
+      });
+      v.src = engine.objectUrl;
+      engine.onEngineFailed = function (reason) {
+        trace("mkv engine failed: " + reason);
+        playbackError("This browser could not play the MKV stream.");
+      };
+      v.addEventListener("loadedmetadata", function once() {
+        v.removeEventListener("loadedmetadata", once);
+        if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
+      });
+      if ((m.subs || []).length) applySubtitles(m.subs);
+      armStall();
+      play();
+      return;
+    }
     // A remote non-HLS file (a direct-play stream) is just a URL the browser can
     // play. Not the engine: it reads byte windows and needs Content-Range
     // readable by page JS, and a media server exposes only Location and Date
@@ -2031,6 +2064,48 @@
       teardownEngine();
       v.src = m.url;
       if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
+      armStall();
+      play();
+      return;
+    }
+    // A downloaded MKV (sender flagged {mkvEngine:true}): the MkvEngine pulls
+    // its byte windows over the data channel — the same fetcher the MseEngine
+    // uses, adapted from callback to promise — and demuxes in-page. The
+    // channel serves clamped ranges, so a short window means end-of-file,
+    // exactly the contract the engine's pump expects.
+    if (m.mkvEngine) {
+      if (!window.MediaSource || typeof window.MkvEngine === "undefined") {
+        fail("This browser can’t play MKVs (no MSE).");
+        return;
+      }
+      setStatus("Buffering…", "Streaming over the connection");
+      teardownEngine();
+      engine = new window.MkvEngine(m.url, m.audioTypeIndex || 0, {
+        getTime: function () { return v.currentTime || 0; },
+        log: trace,
+        startAt: startTime,
+        fetcher: function (start, end, signal) {
+          return new Promise(function (resolve, reject) {
+            var req = channelFetcher(m.url, start, end, function (err, buf) {
+              if (err) reject(err); else resolve(buf);
+            });
+            if (signal) signal.addEventListener("abort", function () {
+              try { req.abort(); } catch (e) {}
+              reject(new Error("aborted"));
+            });
+          });
+        }
+      });
+      v.src = engine.objectUrl;
+      engine.onEngineFailed = function (reason) {
+        trace("mkv engine failed: " + reason);
+        playbackError("This browser could not play the MKV over the connection.");
+      };
+      v.addEventListener("loadedmetadata", function once() {
+        v.removeEventListener("loadedmetadata", once);
+        if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
+      });
+      applySubtitles(m.subs);
       armStall();
       play();
       return;
