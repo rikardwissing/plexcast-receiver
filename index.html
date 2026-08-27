@@ -459,12 +459,12 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-25.29"></script>
-<script src="mp4box.all.min.js?v=2026-08-25.29"></script>
+<script src="tv-polyfills.js?v=2026-08-27.30"></script>
+<script src="mp4box.all.min.js?v=2026-08-27.30"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-25.29"></script>
-<script src="mkv-engine.js?v=2026-08-25.29"></script>
+<script src="tv-mse.js?v=2026-08-27.30"></script>
+<script src="mkv-engine.js?v=2026-08-27.30"></script>
 <script>
 (function () {
   "use strict";
@@ -573,7 +573,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-25.29";
+  window.RECEIVER_VERSION = "2026-08-27.30";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1291,9 +1291,31 @@
   // catching up — hls.js's defaults give up in a couple of seconds. The legacy
   // key names are used deliberately: hls.js v1 still honours them, and they
   // work across the versions this page has been pinned to.
-  function remoteHlsConfig() {
+  // Plex writes NO token into playlist URIs, and relative resolution drops
+  // the master's query — so every follow-up fetch (media playlist, the fMP4
+  // EXT-X-MAP init, each segment) goes out tokenless. PMS answers those with
+  // Access-Control-Allow-Origin pinned to app.plex.tv instead of reflecting
+  // this origin (measured 2026-08-27), which the browser surfaces as a
+  // status-0 network error. Auth never needed the token — CORS does.
+  function plexTokenFixer(masterUrl) {
+    var tok = /[?&]X-Plex-Token=([^&]+)/.exec(masterUrl || "");
+    var token = tok ? tok[1] : "";
+    return function (url) {
+      if (!token || url.indexOf("/transcode/universal/") < 0 ||
+          url.indexOf("X-Plex-Token=") >= 0) return url;
+      return url + (url.indexOf("?") >= 0 ? "&" : "?") + "X-Plex-Token=" + token;
+    };
+  }
+  function remoteHlsConfig(masterUrl) {
+    var fixUrl = plexTokenFixer(masterUrl);
     return {
       enableWorker: false,
+      // Opening here makes hls.js skip its own open; headers (Range included)
+      // are set after, so they ride the fixed URL untouched.
+      xhrSetup: function (xhr, url) {
+        var fixed = fixUrl(url);
+        if (fixed !== url) xhr.open("GET", fixed, true);
+      },
       // No native TextTracks from hls.js at all. Remote subtitles are OUR
       // <track>s (sidecars and the synthesized rendition), and hls's dormant
       // rendition track was still showing up in the browser's CC menu as a
@@ -1826,7 +1848,7 @@
     if (isHls) {
       if (!window.Hls || !window.Hls.isSupported()) { fail("This browser can’t play the stream (no MSE)."); return; }
       hls = isRemote
-        ? new window.Hls(remoteHlsConfig())
+        ? new window.Hls(remoteHlsConfig(m.url))
         : new window.Hls({ loader: DataChannelLoader, enableWorker: false });
       remoteRecoveries = 0;
       hls.loadSource(m.url);
