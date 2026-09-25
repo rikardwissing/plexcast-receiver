@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portage Privacy Policy</title>
+<link rel="icon" href="/icon.png">
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0B0D22; color: #E6E9F5; font: 17px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 680px; margin: 0 auto; padding: 56px 24px 80px; }
+  h1 { font-size: 34px; margin: 0 0 8px; }
+  h2 { font-size: 20px; margin: 40px 0 10px; color: #8FD3FF; }
+  p, li { color: #C9CEE0; }
+  a { color: #5FC8FF; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .meta { color: #7C819C; font-size: 15px; }
+  footer { margin-top: 56px; font-size: 14px; color: #7C819C; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Portage Privacy Policy</h1>
+  <p class="meta">Effective 26 September 2026 · Rikard Wissing · <a href="mailto:hi@rikard.dev">hi@rikard.dev</a></p>
+
+  <p>Portage is an app for playing, downloading and casting media from a media server you already have access to. It has no account of its own, no analytics, no advertising and no tracking. This page describes what the app stores and who it communicates with.</p>
+
+  <h2>What stays on your device</h2>
+  <ul>
+    <li>The addresses of the servers you add and the sign-in tokens for them, kept in the system keychain.</li>
+    <li>The media you download, your playback positions, and your track preferences.</li>
+    <li>A diagnostics log of the app's own activity. It never leaves the device unless you choose to share it.</li>
+  </ul>
+  <p>Deleting the app deletes all of this.</p>
+
+  <h2>Who the app talks to</h2>
+  <ul>
+    <li><strong>Your media server</strong> (Plex, Emby or Jellyfin), to browse, stream and download. What the server records about your activity is governed by that server's own settings and policies.</li>
+    <li><strong>plex.tv</strong>, only if you sign in with a Plex account: to complete the sign-in and to list the servers and shared users available to that account.</li>
+    <li><strong>Emby Connect</strong> (connect.emby.media), only if you sign in that way.</li>
+    <li><strong>tv.rikard.dev</strong> and its pairing service, only when you cast to a web browser: it exchanges the connection details between your device and the browser so they can connect directly. No media passes through it, and nothing is kept after the session.</li>
+    <li><strong>STUN servers</strong> operated by Google and Cloudflare, only during browser casting, to work out how the two ends can reach each other. They see the network addresses involved and nothing else.</li>
+    <li><strong>Devices on your local network</strong> you cast to — Chromecast, Google TV, DLNA TVs and browsers — which receive the media you chose to play on them.</li>
+  </ul>
+  <p>Media always flows directly between your device, your server and the screen you cast to.</p>
+
+  <h2>What is not collected</h2>
+  <p>Portage does not collect usage data, does not include analytics or crash-reporting services, does not show ads, and does not sell or share personal data. The app declares no tracking under Apple's App Tracking Transparency rules.</p>
+
+  <h2>Children</h2>
+  <p>Portage is not directed at children and does not knowingly collect information from them.</p>
+
+  <h2>Changes</h2>
+  <p>Changes to this policy are published on this page with a new effective date.</p>
+
+  <footer>
+    <a href="/support/">Support</a> · © 2026 Rikard Wissing
+  </footer>
+</main>
+</body>
+</html>
