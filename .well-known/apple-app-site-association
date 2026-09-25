@@ -2,7 +2,7 @@
   "applinks": {
     "details": [
       {
-        "appIDs": ["3XYXJPF4QV.dev.rikard.portage-ios"],
+        "appIDs": ["RTXAQQG73Y.dev.rikard.portage-ios"],
         "components": [
           { "/": "/auth-done", "comment": "Plex sign-in hands control back here" },
           { "/": "/auth-done/*" }
