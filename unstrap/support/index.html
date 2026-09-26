@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unstrap Support</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #02060d; color: #E8F1EC; font: 17px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 680px; margin: 0 auto; padding: 56px 24px 80px; }
+  h1 { font-size: 34px; margin: 0 0 8px; }
+  h2 { font-size: 20px; margin: 40px 0 10px; color: #68ff78; }
+  p, li { color: #C4D2C8; }
+  a { color: #68ff78; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .lede { font-size: 19px; color: #E8F1EC; }
+  .meta { color: #7C8A80; font-size: 15px; }
+  .contact { margin-top: 24px; padding: 20px 22px; border: 1px solid #16301f; border-radius: 14px; background: #061410; }
+  footer { margin-top: 56px; font-size: 14px; color: #7C8A80; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Unstrap Support</h1>
+  <p class="lede">Unstrap is a companion app for a Bluetooth health wearable. It reads the band's raw sensor data and computes sleep, recovery, strain and heart metrics on your iPhone.</p>
+
+  <div class="contact">
+    <strong>Need help or found a bug?</strong><br>
+    Email <a href="mailto:hi@rikard.dev">hi@rikard.dev</a>. Include what you were doing, your iPhone model and iOS version, and the wearable's firmware version from Settings if it matters. Replies usually come within a few days.
+  </div>
+
+  <h2>Pairing</h2>
+  <p>Open the app with Bluetooth on and the wearable nearby, then choose it from the list. Only one phone can be connected at a time; if the band was paired with another app, forget it there first.</p>
+
+  <h2>Syncing</h2>
+  <p>History downloads over Bluetooth whenever the app is open and the band is in range, and in the background when iOS allows. The band stores weeks of data, so days without the app are filled in on the next sync.</p>
+
+  <h2>Trying the app without a wearable</h2>
+  <p>Settings → Load seeded data fills the app with a sample history so every screen can be explored. Clear all local data in Settings to remove it again.</p>
+
+  <h2>Apple Health</h2>
+  <p>Nothing is written to Apple Health until you tap Export to Apple Health in Settings and grant access. Unstrap writes sleep, heart rate, HRV, oxygen saturation and respiratory rate samples. You can revoke access at any time in the Health app.</p>
+
+  <h2>Your data</h2>
+  <p>All history lives in a database on the phone. Settings → Export database shares it as a file. Deleting the app deletes the data.</p>
+
+  <footer><a href="/unstrap/privacy/">Privacy policy</a> · © 2026 Rikard Wissing</footer>
+</main>
+</body>
+</html>
