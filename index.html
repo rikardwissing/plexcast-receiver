@@ -1398,6 +1398,12 @@
     if (c.indexOf("opus") === 0) return "Opus";
     return c;
   }
+  function shortCodec(c) { return codecName(c).replace(/\s*\(.*\)$/, ""); }
+  function decodeVerdict(reason) {
+    var m = /\(([^)]+)\)/.exec(String(reason));
+    var names = m ? m[1].split(/,\s*/).map(shortCodec).join(", ") : "this format";
+    return "The browser can\u2019t decode " + names + ".";
+  }
   // ?deny=ec-3,aac forces codecs to test the error path without special media.
   var denied = (qs.get("deny") || "").toLowerCase().split(",").filter(Boolean);
   function canPlay(kind, codec) {
@@ -1463,8 +1469,7 @@
       }
       clearStall();
       trace("stall: no progress for " + (STALL_GIVEUP / 1000) + "s (" + now + ")");
-      playbackError("Nothing arrived for " + (STALL_GIVEUP / 1000) +
-                    " seconds — the connection may have dropped.");
+      playbackError("The connection stalled.");
     }, STALL_TICK);
   }
   v.addEventListener("loadeddata", clearStall);
@@ -1492,8 +1497,7 @@
       return;
     }
     var err = v.error;
-    playbackError("The browser reported a media error" +
-                  (err && err.message ? ": " + err.message : "") + ".");
+    playbackError("Playback error" + (err && err.message ? ": " + err.message : "") + ".");
   });
   function play() {
     var pr = v.play();
@@ -2113,13 +2117,12 @@
         }
         var badVideo = verdict("video", video);
         if (badVideo) {
-          playbackError("This browser can’t decode the video: " + codecName(badVideo) + ".");
+          playbackError("The browser can’t decode " + shortCodec(badVideo) + ".");
           return;
         }
         var badAudio = verdict("audio", audio);
         if (badAudio) {
-          playbackError("This browser can’t decode the audio: " + codecName(badAudio) +
-                        ". Convert the file (compatible audio) and cast again.");
+          playbackError("The browser can’t decode " + shortCodec(badAudio) + ".");
           return;
         }
         if (startTime > 0) { try { v.currentTime = startTime; } catch (e) {} }
@@ -2154,8 +2157,7 @@
         }
         var codec = (data.mimeType || "").replace(/^.*codecs="?([^";]+)"?.*$/, "$1");
         if (/bufferAddCodecError|bufferIncompatibleCodecsError|manifestIncompatibleCodecsError/.test(data.details || "")) {
-          playbackError("This browser can’t decode this format" +
-                        (codec ? ": " + codecName(codec) : "") + ".");
+          playbackError("The browser can’t decode " + (codec ? shortCodec(codec) : "this format") + ".");
         } else {
           // Name the request. "Playback failed (fragLoadError)" is a dead end
           // from the sofa AND in the logs: a browser reports a blocked
@@ -2198,9 +2200,8 @@
         trace("mkv engine failed: " + reason);
         // A codec verdict is actionable — name it rather than blaming the MKV.
         playbackError(/cannot decode/.test(String(reason))
-          ? "This browser " + String(reason).replace(/^this device\s*/, "") +
-            ". Convert the file (compatible audio) and cast again."
-          : "This browser could not play the MKV stream.");
+          ? decodeVerdict(reason)
+          : "Couldn’t stream the file.");
       };
       wireMkvSubtitles(engine);
       v.addEventListener("loadedmetadata", function once() {
@@ -2263,9 +2264,8 @@
       engine.onEngineFailed = function (reason) {
         trace("mkv engine failed: " + reason);
         playbackError(/cannot decode/.test(String(reason))
-          ? "This browser " + String(reason).replace(/^this device\s*/, "") +
-            ". Convert the file (compatible audio) and cast again."
-          : "This browser could not play the MKV over the connection.");
+          ? decodeVerdict(reason)
+          : "Couldn’t stream the file.");
       };
       // NOT wireMkvSubtitles here: a downloaded file's text subs arrive as
       // sender-extracted sidecars (applySubtitles) — engine tracks beside
@@ -2326,7 +2326,7 @@
           next.mse = false; next.noEngine = true; next.startTime = at;
           loadMedia(next);
         } else {
-          playbackError("This browser could not play the file over the connection.");
+          playbackError("Couldn’t stream the file.");
         }
       };
       v.addEventListener("loadedmetadata", function once() {
