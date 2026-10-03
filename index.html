@@ -193,6 +193,36 @@
   #reconnect .rc-title { margin-top: 14px; font-size: 18px; font-weight: 700; color: #F4F7FF; color: var(--ink); }
   #reconnect .rc-sub { margin-top: 6px; font-size: 14px; color: #AEB7D4; color: var(--muted); }
 
+  #upnext { position: fixed; right: 6vw; bottom: 13vh; display: none; align-items: center; padding: 12px;
+    background: rgba(11,13,34,0.92); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px;
+    box-shadow: 0 10px 34px rgba(0,0,0,0.45); z-index: 20; cursor: pointer; }
+  #upnext.show { display: flex; }
+  #upnext .un-art { position: relative; width: 160px; height: 90px; flex: 0 0 auto; margin-right: 14px; }
+  #upnext .un-art img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 8px;
+    background: rgba(255,255,255,0.08); }
+  #upnext .un-art img.un-placeholder { object-fit: contain; opacity: 0.5; }
+  #upnext svg { position: absolute; top: -4px; left: -4px; width: 168px; height: 98px; overflow: visible; }
+  #un-ring { fill: none; stroke: #19D8E6; stroke-width: 3; stroke-linecap: round; }
+  #upnext .un-text { max-width: 280px; }
+  #upnext p { margin: 0; }
+  #un-label { font-size: 13px; font-weight: 600; color: #19D8E6; margin-bottom: 4px; }
+  #un-title { font-size: 17px; font-weight: 600; color: #F4F7FF; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #un-sub { font-size: 13px; color: #AEB7D4; margin-top: 3px; }
+  #upnext .un-hint { font-size: 12px; color: rgba(244,247,255,0.6); margin-top: 9px; }
+  #upnext .un-key { display: inline-block; padding: 0 6px; margin-right: 6px; border: 1px solid rgba(244,247,255,0.5);
+    border-radius: 5px; font-size: 11px; line-height: 17px; }
+  @media (min-width: 1280px) {
+    #upnext { padding: 18px; border-radius: 22px; }
+    #upnext .un-art { width: 240px; height: 135px; margin-right: 22px; }
+    #upnext svg { width: 248px; height: 143px; }
+    #upnext .un-text { max-width: 420px; }
+    #un-label { font-size: 19px; margin-bottom: 6px; }
+    #un-title { font-size: 27px; }
+    #un-sub { font-size: 19px; margin-top: 5px; }
+    #upnext .un-hint { font-size: 17px; margin-top: 14px; }
+    #upnext .un-key { font-size: 15px; line-height: 23px; padding: 0 9px; border-radius: 7px; }
+  }
+
   /* Paired senders on the landing: we're listening for their casts. */
   /* This is status, and status the user has already been told once: a screen
      they paired is a screen that stays paired. It gets one quiet line under
@@ -346,6 +376,19 @@
       </div>
     </div>
 
+    <div id="upnext">
+      <div class="un-art">
+        <img id="un-img" alt="">
+        <svg viewBox="0 0 168 98" preserveAspectRatio="none"><path id="un-ring" d="M14,2 H154 A12,12 0 0 1 166,14 V84 A12,12 0 0 1 154,96 H14 A12,12 0 0 1 2,84 V14 A12,12 0 0 1 14,2 Z"/></svg>
+      </div>
+      <div class="un-text">
+        <p id="un-label">Up next</p>
+        <p id="un-title"></p>
+        <p id="un-sub"></p>
+        <p class="un-hint"><span class="un-key">OK</span>Play now</p>
+      </div>
+    </div>
+
     <!-- Connecting / status. This text is the PRE-SCRIPT state: nothing has been
          reached yet, and on a bare visit the script replaces this card with the
          code screen within a beat. It used to read "Connecting… / Reaching the
@@ -459,12 +502,12 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-08-27.30"></script>
-<script src="mp4box.all.min.js?v=2026-08-27.30"></script>
+<script src="tv-polyfills.js?v=2026-10-03.1"></script>
+<script src="mp4box.all.min.js?v=2026-10-03.1"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-08-27.30"></script>
-<script src="mkv-engine.js?v=2026-08-27.30"></script>
+<script src="tv-mse.js?v=2026-10-03.1"></script>
+<script src="mkv-engine.js?v=2026-10-03.1"></script>
 <script>
 (function () {
   "use strict";
@@ -573,7 +616,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-08-27.30";
+  window.RECEIVER_VERSION = "2026-10-03.1";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1016,6 +1059,46 @@
     return -1;
   }
 
+  var upNextBox = document.getElementById("upnext"), upNextShown = false;
+  function upNextShow(m) {
+    document.getElementById("un-label").textContent = m.label || "Up next";
+    document.getElementById("un-title").textContent = m.title || "";
+    var sub = document.getElementById("un-sub");
+    sub.textContent = m.subtitle || "";
+    sub.style.display = m.subtitle ? "" : "none";
+    var img = document.getElementById("un-img");
+    img.src = m.art || "icon.png";
+    img.className = m.art ? "" : "un-placeholder";
+    upNextBox.classList.add("show");
+    upNextShown = true;
+    upNextRing(m.endsIn, m.total);
+  }
+  function upNextRing(endsIn, total) {
+    // Chromium 38 has no pathLength on shapes, so the ring is a path measured in script.
+    var ring = document.getElementById("un-ring");
+    if (endsIn == null || !total) { ring.style.display = "none"; return; }
+    ring.style.display = "";
+    var length = ring.getTotalLength(), left = Math.max(0, Math.min(1, endsIn / total));
+    ring.style.transition = "none";
+    ring.style.strokeDasharray = length + " " + length;
+    ring.style.strokeDashoffset = String(length * left);
+    ring.getBoundingClientRect();
+    ring.style.transition = "stroke-dashoffset " + endsIn + "s linear";
+    ring.style.strokeDashoffset = "0";
+  }
+  function upNextHide() {
+    upNextShown = false;
+    upNextBox.classList.remove("show");
+  }
+  function upNextPlay() {
+    if (upNextShown && channelReady()) { try { dc.send(JSON.stringify({ t: "playNext" })); } catch (e) {} }
+  }
+  upNextBox.onclick = upNextPlay;
+  document.addEventListener("keydown", function (e) {
+    if (!upNextShown) return;
+    if ((e.keyCode || e.which) === 13) { e.preventDefault(); upNextPlay(); }
+  });
+
   function onControl(obj) {
     switch (obj.t) {
       case "hi":
@@ -1033,12 +1116,13 @@
         rememberPair(obj.id, obj.name || sender);
         window.PLEXCAST_PAIRED = obj.id;   // observable for debugging/QA
         break;
-      case "load": loadMedia(obj); break;
+      case "load": upNextHide(); loadMedia(obj); break;
+      case "upNext": if (obj.hide) upNextHide(); else upNextShow(obj); break;
       case "play": v.play().catch(function () {}); break;
       case "pause": v.pause(); break;
       case "seek": if (obj.time != null) { try { v.currentTime = obj.time; } catch (e) {} } break;
       case "volume": if (obj.value != null) { try { v.volume = obj.value; } catch (e) {} } break;
-      case "stop": stopped = true; stopMedia(); break;
+      case "stop": stopped = true; upNextHide(); stopMedia(); break;
       case "audioTrack":
         // Sender picked an audio track by its app typeIndex. On the package path
         // renditions are named audio<typeIndex>.m3u8, so match by URL (hls.js
@@ -2917,6 +3001,11 @@
   // A deep link (#code / ?room=) connects straight away; a landing session
   // (typed code or paired listen) starts itself once it has a room.
   if (room) start(1);
+  if (param("preview") === "upnext") {
+    showVideo();
+    upNextShow({ label: "We suggest", title: "S01E02 · The Big Actor", subtitle: "Dragnet (1951)",
+                 art: null, endsIn: 7, total: 10 });
+  }
   // Initialisation finished. From here the receiver's own error handling owns
   // the screen, so the boot reporter stands down (see the top of the page) —
   // otherwise a stray late error would wipe out live playback with an error card.
