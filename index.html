@@ -211,6 +211,29 @@
   #upnext .un-hint { font-size: 12px; color: rgba(244,247,255,0.6); margin-top: 9px; }
   #upnext .un-key { display: inline-block; padding: 0 6px; margin-right: 6px; border: 1px solid rgba(244,247,255,0.5);
     border-radius: 5px; font-size: 11px; line-height: 17px; }
+  #upnext .un-touch { display: none; }
+  .touch #upnext .un-remote { display: none; }
+  .touch #upnext .un-touch { display: inline; }
+  @media (max-width: 600px) {
+    #upnext { left: 12px; right: 12px; bottom: 76px; padding: 10px; border-radius: 14px; }
+    #upnext .un-art { width: 112px; height: 63px; margin-right: 12px; }
+    #upnext svg { width: 120px; height: 71px; }
+    #upnext .un-text { max-width: none; min-width: 0; flex: 1 1 auto; }
+    #un-label { font-size: 12px; margin-bottom: 2px; }
+    #un-title { font-size: 15px; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    #un-sub { font-size: 12px; margin-top: 2px; }
+    #upnext .un-hint { font-size: 11px; margin-top: 6px; }
+  }
+  @media (max-height: 480px) {
+    #upnext { bottom: 60px; padding: 8px; }
+    #upnext .un-art { width: 96px; height: 54px; margin-right: 10px; }
+    #upnext svg { width: 104px; height: 62px; }
+    #upnext .un-text { max-width: 240px; }
+    #un-label { font-size: 12px; margin-bottom: 2px; }
+    #un-title { font-size: 14px; }
+    #un-sub { font-size: 12px; margin-top: 2px; }
+    #upnext .un-hint { font-size: 11px; margin-top: 5px; }
+  }
   @media (min-width: 1280px) {
     #upnext { padding: 18px; border-radius: 22px; }
     #upnext .un-art { width: 240px; height: 135px; margin-right: 22px; }
@@ -385,7 +408,7 @@
         <p id="un-label">Up next</p>
         <p id="un-title"></p>
         <p id="un-sub"></p>
-        <p class="un-hint"><span class="un-key">OK</span>Play now</p>
+        <p class="un-hint"><span class="un-remote"><span class="un-key">OK</span>Play now</span><span class="un-touch">Tap to play</span></p>
       </div>
     </div>
 
@@ -502,12 +525,12 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-10-03.1"></script>
-<script src="mp4box.all.min.js?v=2026-10-03.1"></script>
+<script src="tv-polyfills.js?v=2026-10-04.1"></script>
+<script src="mp4box.all.min.js?v=2026-10-04.1"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-10-03.1"></script>
-<script src="mkv-engine.js?v=2026-10-03.1"></script>
+<script src="tv-mse.js?v=2026-10-04.1"></script>
+<script src="mkv-engine.js?v=2026-10-04.1"></script>
 <script>
 (function () {
   "use strict";
@@ -616,7 +639,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-10-03.1";
+  window.RECEIVER_VERSION = "2026-10-04.1";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1060,6 +1083,7 @@
   }
 
   var upNextBox = document.getElementById("upnext"), upNextShown = false;
+  if ("ontouchstart" in window || (navigator.maxTouchPoints || 0) > 0) document.documentElement.className += " touch";
   function upNextShow(m) {
     document.getElementById("un-label").textContent = m.label || "Up next";
     document.getElementById("un-title").textContent = m.title || "";
