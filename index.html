@@ -541,12 +541,12 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-10-04.2"></script>
-<script src="mp4box.all.min.js?v=2026-10-04.2"></script>
+<script src="tv-polyfills.js?v=2026-10-04.3"></script>
+<script src="mp4box.all.min.js?v=2026-10-04.3"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-10-04.2"></script>
-<script src="mkv-engine.js?v=2026-10-04.2"></script>
+<script src="tv-mse.js?v=2026-10-04.3"></script>
+<script src="mkv-engine.js?v=2026-10-04.3"></script>
 <script>
 (function () {
   "use strict";
@@ -655,7 +655,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-10-04.2";
+  window.RECEIVER_VERSION = "2026-10-04.3";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1640,9 +1640,81 @@
     });
   }
   // Poster is served over the data channel too (no HTTP media server exists).
-  function setPoster(path) {
+  function slateRound(g, x, y, w, h, r) {
+    g.beginPath(); g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+  }
+  function slateGlow(g, x, y, r, rgb, alpha) {
+    var gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, "rgba(" + rgb + "," + alpha + ")"); gr.addColorStop(1, "rgba(" + rgb + ",0)");
+    g.fillStyle = gr; g.fillRect(0, 0, g.canvas.width, g.canvas.height);
+  }
+  function slateLines(g, text, max) {
+    var words = text.split(" "), lines = [], line = "", i, j, next, last, parts = text.split(" \u00b7 ");
+    if (parts.length > 1 && g.measureText(text).width > max) {
+      for (i = parts.length - 1; i > 0; i--) {
+        next = parts.slice(0, i).join(" \u00b7 "); last = parts.slice(i).join(" \u00b7 ");
+        if (g.measureText(next).width <= max && g.measureText(last).width <= max) return [next, last];
+      }
+    }
+    for (i = 0; i < words.length; i++) {
+      next = line ? line + " " + words[i] : words[i];
+      if (g.measureText(next).width <= max) { line = next; continue; }
+      if (line) lines.push(line);
+      line = words[i];
+      while (line.length > 1 && g.measureText(line).width > max) {
+        for (j = line.length - 1; j > 1 && g.measureText(line.slice(0, j)).width > max; j--) {}
+        lines.push(line.slice(0, j)); line = line.slice(j);
+      }
+    }
+    if (line) lines.push(line);
+    if (lines.length <= 2) return lines;
+    last = lines.slice(1).join(" ");
+    while (last.length > 1 && g.measureText(last + "…").width > max) last = last.slice(0, -1);
+    return [lines[0], last + "…"];
+  }
+  function slatePoster(title) {
+    try {
+      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      var w = Math.round((window.innerWidth || 1280) * dpr), h = Math.round((window.innerHeight || 720) * dpr);
+      var k = Math.min(1, 1920 / Math.max(w, h)); w = Math.round(w * k); h = Math.round(h * k);
+      var c = document.createElement("canvas"); c.width = w; c.height = h;
+      var g = c.getContext("2d"), u = Math.min(w, h) / 100, hair = Math.max(1, dpr * k);
+      g.fillStyle = "#0B0D22"; g.fillRect(0, 0, w, h);
+      slateGlow(g, w * 0.5, -h * 0.1, Math.max(w, h) * 0.75, "25,216,230", 0.14);
+      slateGlow(g, w * 0.9, h * 1.05, Math.max(w, h) * 0.6, "123,69,246", 0.12);
+      var size = Math.max(18 * dpr * k, u * 3.6), gap = u * 4;
+      g.font = "600 " + Math.round(size) + "px -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif";
+      var tw = h > w ? w * 0.74 : Math.min(w * 0.62, u * 64), th = tw * 9 / 16, r = u * 1.6;
+      var lines = slateLines(g, String(title || ""), Math.min(w * 0.84, tw * 1.5));
+      var tx = (w - tw) / 2, ty = (h - (th + (lines.length ? gap + lines.length * size * 1.25 : 0))) / 2;
+      g.save(); g.shadowColor = "rgba(0,0,0,0.55)"; g.shadowBlur = u * 7; g.shadowOffsetY = u * 2.4;
+      slateRound(g, tx, ty, tw, th, r); g.fillStyle = "#12153A"; g.fill(); g.restore();
+      g.save(); slateRound(g, tx, ty, tw, th, r); g.clip();
+      slateGlow(g, tx + tw * 0.15, ty, Math.sqrt(tw * tw * 0.72 + th * th) * 0.62, "25,216,230", 0.42);
+      slateGlow(g, tx + tw, ty + th, Math.sqrt(tw * tw + th * th) * 0.64, "123,69,246", 0.5);
+      g.restore();
+      slateRound(g, tx + hair / 2, ty + hair / 2, tw - hair, th - hair, r);
+      g.lineWidth = hair; g.strokeStyle = "rgba(255,255,255,0.07)"; g.stroke();
+      var cx = w / 2, cy = ty + th / 2, cr = th * 0.185;
+      g.beginPath(); g.arc(cx, cy, cr, 0, Math.PI * 2); g.fillStyle = "rgba(11,13,34,0.45)"; g.fill();
+      g.strokeStyle = "rgba(244,247,255,0.16)"; g.stroke();
+      g.beginPath(); g.moveTo(cx - cr * 0.17, cy - cr * 0.28); g.lineTo(cx + cr * 0.33, cy);
+      g.lineTo(cx - cr * 0.17, cy + cr * 0.28); g.closePath();
+      g.fillStyle = "#F4F7FF"; g.strokeStyle = "#F4F7FF"; g.lineJoin = "round"; g.lineWidth = cr * 0.08;
+      g.fill(); g.stroke();
+      g.textAlign = "center"; g.textBaseline = "top"; g.fillStyle = "#F4F7FF";
+      for (var i = 0; i < lines.length; i++) g.fillText(lines[i], w / 2, ty + th + gap + i * size * 1.25);
+      return c.toDataURL("image/jpeg", 0.9);
+    } catch (e) { return ""; }
+  }
+  function setPoster(path, title) {
+    v.poster = slatePoster(title);
     if (!path) return;
+    var forMedia = currentMedia;
     fetchOverChannel(path, {}).then(function (r) {
+      if (currentMedia !== forMedia) return;
       v.poster = URL.createObjectURL(new Blob([r.data], { type: (r.meta && r.meta.ctype) || "image/jpeg" }));
     }).catch(function () {});
   }
@@ -1960,7 +2032,7 @@
     // = the sender menu), else off. Sticky applySubtitles enables it on load.
     wantedSubtitle = (m.subtitleTypeIndex != null) ? m.subtitleTypeIndex : -1;
     showVideo();
-    setPoster(m.poster);
+    setPoster(m.poster, m.title);
     var startTime = m.startTime || 0;
     var isHls = /\.m3u8(\?|$)/i.test(m.url || "");
     // A REMOTE load: the media lives on the sender's media server, not on the
@@ -3041,6 +3113,10 @@
   // A deep link (#code / ?room=) connects straight away; a landing session
   // (typed code or paired listen) starts itself once it has a room.
   if (room) start(1);
+  if (param("preview") === "loading") {
+    showVideo();
+    setPoster(null, "Dragnet (1951) \u00b7 S01E02 \u00b7 The Big Actor");
+  }
   if (param("preview") === "upnext") {
     showVideo();
     upNextShow({ label: "We suggest", title: "S01E02 · The Big Actor", subtitle: "Dragnet (1951)",
