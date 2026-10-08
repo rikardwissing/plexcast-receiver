@@ -541,12 +541,12 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-10-08.5"></script>
-<script src="mp4box.all.min.js?v=2026-10-08.5"></script>
+<script src="tv-polyfills.js?v=2026-10-08.6"></script>
+<script src="mp4box.all.min.js?v=2026-10-08.6"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-10-08.5"></script>
-<script src="mkv-engine.js?v=2026-10-08.5"></script>
+<script src="tv-mse.js?v=2026-10-08.6"></script>
+<script src="mkv-engine.js?v=2026-10-08.6"></script>
 <script>
 (function () {
   "use strict";
@@ -655,7 +655,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-10-08.5";
+  window.RECEIVER_VERSION = "2026-10-08.6";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1159,6 +1159,7 @@
       case "load": upNextHide(); loadMedia(obj); break;
       case "upNext": if (obj.hide) upNextHide(); else upNextShow(obj); break;
       case "play": v.play().catch(function () {}); break;
+      case "stats": try { if (channelReady()) dc.send(JSON.stringify(statsReply())); } catch (x) {} break;
       case "pause": v.pause(); break;
       case "seek": if (obj.time != null) { try { v.currentTime = obj.time; } catch (e) {} } break;
       case "volume": if (obj.value != null) { try { v.volume = obj.value; } catch (e) {} } break;
@@ -1810,6 +1811,50 @@
   }
 
   var engine = null;
+  var hlsBytes = 0;
+  var lastDecoded = null;
+
+  function playerName() {
+    if (engine) return typeof engine.bytesFetched === "number" ? "MKV engine" : "MSE engine";
+    if (hls) return "hls.js";
+    return "native player";
+  }
+
+  function statsReply() {
+    var r = { t: "stats", engine: playerName(), version: window.RECEIVER_VERSION || null,
+              viewportWidth: Math.round(window.innerWidth || 0), viewportHeight: Math.round(window.innerHeight || 0),
+              pixelRatio: window.devicePixelRatio || 1 };
+    if (v.videoWidth) { r.width = v.videoWidth; r.height = v.videoHeight; }
+    if (typeof v.getVideoPlaybackQuality === "function") {
+      var q = v.getVideoPlaybackQuality();
+      r.droppedFrames = q.droppedVideoFrames;
+      r.totalFrames = q.totalVideoFrames;
+    } else if (typeof v.webkitDroppedFrameCount === "number") {
+      r.droppedFrames = v.webkitDroppedFrameCount;
+      r.totalFrames = v.webkitDecodedFrameCount;
+    }
+    var now = v.currentTime || 0, i;
+    try {
+      for (i = 0; i < v.buffered.length; i++) {
+        if (v.buffered.start(i) <= now + 0.5 && v.buffered.end(i) >= now) { r.bufferAhead = v.buffered.end(i) - now; break; }
+      }
+    } catch (e) {}
+    if (typeof v.webkitVideoDecodedByteCount === "number") {
+      var sample = { bytes: v.webkitVideoDecodedByteCount + (v.webkitAudioDecodedByteCount || 0), at: new Date().getTime() };
+      if (lastDecoded && sample.at > lastDecoded.at && sample.bytes >= lastDecoded.bytes) {
+        r.bitrate = (sample.bytes - lastDecoded.bytes) * 8000 / (sample.at - lastDecoded.at);
+      }
+      lastDecoded = sample;
+    }
+    if (engine && typeof engine.bytesFetched === "number") {
+      r.bytesTransferred = engine.bytesFetched;
+      if (engine.throughputBps > 0) r.estimatedBandwidth = engine.throughputBps;
+    } else if (hls) {
+      r.bytesTransferred = hlsBytes;
+      if (hls.bandwidthEstimate > 0) r.estimatedBandwidth = hls.bandwidthEstimate;
+    }
+    return r;
+  }
   // The last `load` command is retained only as a recovery path if a browser
   // cannot mutate its audio SourceBuffer or a native refill times out.
   var currentMedia = null;
@@ -2075,6 +2120,7 @@
     panel.querySelector(".spinner").style.display = "";   // buffering again
     stopped = false;             // a fresh load = active again (clears any prior stop)
     currentMedia = m;            // remembered so an audio switch can rebuild from it
+    lastDecoded = null;
     currentGen = m.gen || 0;     // now the current load; new statuses carry this
     // Start on the subtitle the sender picked (the user's choice for this file,
     // = the sender menu), else off. Sticky applySubtitles enables it on load.
@@ -2098,6 +2144,11 @@
       hls = isRemote
         ? new window.Hls(remoteHlsConfig(m.url))
         : new window.Hls({ loader: DataChannelLoader, enableWorker: false });
+      hlsBytes = 0;
+      if (window.Hls.Events.FRAG_LOADED) hls.on(window.Hls.Events.FRAG_LOADED, function (e, d) {
+        var p = d && d.payload;
+        if (p && p.byteLength) hlsBytes += p.byteLength;
+      });
       remoteRecoveries = 0;
       hls.loadSource(m.url);
       hls.attachMedia(v);
