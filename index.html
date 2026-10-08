@@ -1488,7 +1488,11 @@
      up, so this is the same "ready for the next pick" screen the other two
      receivers show — an invitation, not a dead end reading "Stopped". The
      spinner means "working on it", so it stops here. */
+  var retryWait = null;
+  function clearRetryWait() { if (retryWait) { clearTimeout(retryWait); retryWait = null; } }
+
   function stopMedia() {
+    clearRetryWait();
     clearStall();
     if (remoteRetryTimer) { clearTimeout(remoteRetryTimer); remoteRetryTimer = null; }
     if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
@@ -1507,13 +1511,27 @@
     // While reconnecting, the dead channel makes the (still-mounted) hls throw —
     // ignore it so the frozen frame + overlay stay put instead of a "can't play" card.
     if (reconnecting) return;
+    var retrying = !!(currentMedia && currentMedia.audioRetry);
+    clearRetryWait();
     clearStall();
     if (remoteRetryTimer) { clearTimeout(remoteRetryTimer); remoteRetryTimer = null; }
     if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
     teardownEngine();
     clearSubtitles();
     v.pause(); v.removeAttribute("src"); v.load();
-    showPanel(); setStatus("Can’t play this", detail);
+    showPanel();
+    if (retrying) {
+      currentMedia.audioRetry = false;
+      trace("waiting for the sender to retry with AAC audio");
+      panel.querySelector(".spinner").style.display = "";
+      setStatus("Buffering…", "Streaming from the server");
+      retryWait = setTimeout(function () {
+        retryWait = null;
+        setStatus("Can’t play this", detail);
+      }, 20000);
+    } else {
+      setStatus("Can’t play this", detail);
+    }
     try { if (channelReady()) dc.send(JSON.stringify({ t: "cantplay", reason: detail })); } catch (x) {}
   }
 
