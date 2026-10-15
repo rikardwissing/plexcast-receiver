@@ -541,12 +541,12 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-10-15.2"></script>
-<script src="mp4box.all.min.js?v=2026-10-15.2"></script>
+<script src="tv-polyfills.js?v=2026-10-15.3"></script>
+<script src="mp4box.all.min.js?v=2026-10-15.3"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-10-15.2"></script>
-<script src="mkv-engine.js?v=2026-10-15.2"></script>
+<script src="tv-mse.js?v=2026-10-15.3"></script>
+<script src="mkv-engine.js?v=2026-10-15.3"></script>
 <script>
 (function () {
   "use strict";
@@ -585,6 +585,7 @@
   // NAT" advice into "lost the sender".
   var wasConnected = false;
   var everOpened = false;
+  var preferLegacyOffer = false;
   // Set by the landing: puts the page back into paired-listening after a cast
   // ends. Null on code/deep-link sessions.
   var resumeListening = null;
@@ -656,7 +657,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-10-15.2";
+  window.RECEIVER_VERSION = "2026-10-15.3";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -3134,7 +3135,10 @@
         var address = publicAddressOf(line);
         if (address) theirPublic[address] = true;
       });
-      return sdpCall(pc, "setRemoteDescription", describe(parsed)).catch(function (e) {
+      var firstSdp = preferLegacyOffer ? legacySdp(parsed.sdp) : parsed.sdp;
+      if (firstSdp !== parsed.sdp) usedLegacyOffer = true;
+      return sdpCall(pc, "setRemoteDescription", describe({ type: parsed.type, sdp: firstSdp })).catch(function (e) {
+        if (usedLegacyOffer) throw e;
         var rewritten = legacySdp(parsed.sdp);
         if (rewritten === parsed.sdp) throw e;
         usedLegacyOffer = true;   // ...so the answer must be translated back (see modernSdpForSender)
@@ -3164,6 +3168,14 @@
       // eventually finds — counting at failure time would hide that.
       var localSdp = (pc.localDescription && pc.localDescription.sdp) || "";
       if (!localSdp) throw new Error("This TV's browser created no connection answer.");
+      if (/^m=application 0 /m.test(localSdp)) {
+        if (usedLegacyOffer) throw new Error("This TV's browser declined the data connection the sender needs.");
+        preferLegacyOffer = true;
+        trace("answer declined the data channel - answering again with the legacy DTLS/SCTP offer");
+        if (activeSignal && signalOffer) activeSignal.offers.unshift(signalOffer);
+        try { pc.close(); } catch (x) {}
+        throw { retry: true, why: "the browser declined the data channel in the modern offer" };
+      }
       sentCandidates = (localSdp.match(/^a=candidate:/gm) || []).length;
       // Answer in the profile that was OFFERED, not the one this engine speaks,
       // and agreeing with it on the mid/BUNDLE token as well as the m= proto.
