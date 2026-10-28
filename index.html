@@ -541,12 +541,13 @@
      2026-08-13.12" while executing the .11 engine, which sent me chasing a
      performance result the deployed code could not have produced. A version
      that doesn't prove which code ran is worse than none. -->
-<script src="tv-polyfills.js?v=2026-10-15.3"></script>
-<script src="mp4box.all.min.js?v=2026-10-15.3"></script>
+<script src="tv-polyfills.js?v=2026-10-28.1"></script>
+<script src="mp4box.all.min.js?v=2026-10-28.1"></script>
 <!-- The MSE engine, shared verbatim with the LAN receiver: hand-built init
      segments, keyframe-cut fragments, per-SourceBuffer mfhd sequences. -->
-<script src="tv-mse.js?v=2026-10-15.3"></script>
-<script src="mkv-engine.js?v=2026-10-15.3"></script>
+<script src="tv-mse.js?v=2026-10-28.1"></script>
+<script src="mkv-engine.js?v=2026-10-28.1"></script>
+<script src="tv-capabilities.js?v=2026-10-28.1"></script>
 <script>
 (function () {
   "use strict";
@@ -567,6 +568,16 @@
   var room = (qs.get("room") || location.hash.replace(/^#/, "")).trim();
 
   var v = document.getElementById("v");
+  var browserCaps = null, capsWaiting = [];
+  function capabilitiesMeasured(caps) {
+    if (browserCaps) return;
+    browserCaps = caps;
+    var waiting = capsWaiting; capsWaiting = [];
+    for (var w = 0; w < waiting.length; w++) waiting[w](caps);
+  }
+  try { window.PortageBrowserCapabilities(v, capabilitiesMeasured, true); } catch (e) { capabilitiesMeasured({}); }
+  setTimeout(function () { capabilitiesMeasured({}); }, 4000);
+  function withCapabilities(then) { if (browserCaps) then(browserCaps); else capsWaiting.push(then); }
   var panel = document.getElementById("panel");
   var entry = document.getElementById("entry");
   var statusEl = document.getElementById("status");
@@ -657,7 +668,7 @@
   /* Bumped on every receiver change — the corner badge and the hello both
      carry it, so "is the TV running the latest?" is answerable at a glance
      (and from the sender's diagnostics log). */
-  window.RECEIVER_VERSION = "2026-10-15.3";
+  window.RECEIVER_VERSION = "2026-10-28.1";
   /* Fill the badge HERE, not from an inline script beside the div — that one
      ran before this block defined the version and stamped an empty corner. */
   try { document.getElementById("receiver-version").textContent = window.RECEIVER_VERSION; } catch (e) {}
@@ -1160,9 +1171,9 @@
         break;
       case "load": upNextHide(); loadMedia(obj); break;
       case "upNext": if (obj.hide) upNextHide(); else upNextShow(obj); break;
-      case "play": v.play().catch(function () {}); break;
+      case "play": if (currentMedia) currentMedia.paused = false; v.play().catch(function () {}); break;
       case "stats": try { if (channelReady()) dc.send(JSON.stringify(statsReply())); } catch (x) {} break;
-      case "pause": v.pause(); break;
+      case "pause": if (currentMedia) currentMedia.paused = true; v.pause(); break;
       case "seek": if (obj.time != null) { try { v.currentTime = obj.time; } catch (e) {} } break;
       case "volume": if (obj.value != null) { try { v.volume = obj.value; } catch (e) {} } break;
       case "stop": stopped = true; upNextHide(); stopMedia(); break;
@@ -1210,7 +1221,7 @@
         // names, so routing there made every phone pick a silent no-op while
         // the browser's own CC menu (which flips the <track> directly) worked.
         if (obj.typeIndex == null) break;
-        var sidecarDriven = currentMedia && currentMedia.remote === true &&
+        var sidecarDriven = currentMedia && (currentMedia.remote === true || currentMedia.madeStream === true) &&
                             (currentMedia.subs || []).length > 0;
         trace("subtitleTrack cmd: typeIndex=" + obj.typeIndex +
               " sidecarDriven=" + sidecarDriven +
@@ -1653,6 +1664,7 @@
     playbackError("Playback error" + (err && err.message ? ": " + err.message : "") + ".");
   });
   function play() {
+    if (currentMedia && currentMedia.paused === true) { v.pause(); return; }
     var pr = v.play();
     if (pr && pr.catch) pr.catch(function () {
       // Autoplay was blocked — this open had no user gesture (a deep-link / QR
@@ -2151,7 +2163,7 @@
       if (!window.Hls || !window.Hls.isSupported()) { fail("This browser can’t play the stream (no MSE)."); return; }
       hls = isRemote
         ? new window.Hls(remoteHlsConfig(m.url))
-        : new window.Hls({ loader: DataChannelLoader, enableWorker: false });
+        : new window.Hls({ loader: DataChannelLoader, enableWorker: false, renderTextTracksNatively: m.madeStream !== true });
       hlsBytes = 0;
       if (window.Hls.Events.FRAG_LOADED) hls.on(window.Hls.Events.FRAG_LOADED, function (e, d) {
         var p = d && d.payload;
@@ -2212,7 +2224,7 @@
       // both at once was measured to zero out both (hls.js reads a sidecar
       // going "showing" as the user deselecting its track, and its own track
       // knocks the sidecar's mode about). One mechanism per load.
-      var remoteUsesSidecars = isRemote && (m.subs || []).length > 0;
+      var remoteUsesSidecars = (isRemote || m.madeStream === true) && (m.subs || []).length > 0;
       if (remoteUsesSidecars) applySubtitles(m.subs);
       // Remote subtitles go through ONE mechanism: the <track> machinery.
       // hls.js's own subtitle selection on these live streams was measured
@@ -2224,7 +2236,7 @@
       // times are absolute — measured — so they simply concatenate) and
       // synthesizes the same kind of <track> the sidecars use.
       var renditionTI = (typeof m.renditionTypeIndex === "number") ? m.renditionTypeIndex : null;
-      if (isRemote) {
+      if (isRemote || m.madeStream === true) {
         try { hls.subtitleDisplay = false; hls.subtitleTrack = -1; } catch (e) {}
       }
       // Cue timing, the measured version — third attempt, and this one has no
@@ -3051,11 +3063,15 @@
         // The hello carries the pairing tokens this browser holds, so a sender
         // that already knows one recognises us and reuses it — connecting with
         // a fresh code doesn't create a duplicate pairing on either end.
-        try {
-          dc.send(JSON.stringify({ t: "hello", label: viewerLabel(),
-                                   v: window.RECEIVER_VERSION,
-                                   pairings: loadPairs().map(function (p) { return p.id; }) }));
-        } catch (x) {}
+        var helloChannel = dc;
+        withCapabilities(function (caps) {
+          if (helloChannel !== dc || !channelReady()) return;
+          try {
+            dc.send(JSON.stringify({ t: "hello", label: viewerLabel(),
+                                     v: window.RECEIVER_VERSION, capabilities: caps,
+                                     pairings: loadPairs().map(function (p) { return p.id; }) }));
+          } catch (x) {}
+        });
       };
       dc.onclose = function () { handleDrop(); };
     };
