@@ -17,17 +17,25 @@
         if(name.indexOf('HEVC')===0&&height===2160)codec=codec.replace('L120','L150');
         if(name==='AV1')codec=height===720?'av01.0.05M.08':height===1080?'av01.0.08M.08':'av01.0.12M.08';
         if(name==='VP9')codec=height===720?'vp09.00.31.08':height===1080?'vp09.00.40.08':'vp09.00.51.08';
+        var fastCodec=codec;
+        if(name.indexOf('H264')===0&&height>=1080)fastCodec=codec.slice(0,-2)+(height===2160?'34':'2a');
+        if(name.indexOf('HEVC')===0&&height>=1080)fastCodec=height===2160?codec.replace('L150','L153'):codec.replace('L120','L123');
+        if(name==='AV1'&&height>=1080)fastCodec=height===2160?'av01.0.13M.08':'av01.0.09M.08';
+        if(name==='VP9'&&height===1080)fastCodec='vp09.00.41.08';
         var mime='video/mp4; codecs="'+codec+'"', key='picture'+name+height;
         caps[key]=support(mime);
-        function measure(transfer){
+        function measure(transfer,rate){
           if(!navigator.mediaCapabilities||!navigator.mediaCapabilities.decodingInfo)return;
-          var video={contentType:mime,width:width,height:height,bitrate:20000000,framerate:30};
+          var video={contentType:rate?'video/mp4; codecs="'+fastCodec+'"':mime,width:width,height:height,bitrate:20000000,framerate:rate||30};
           var answerKey=key;
-          if(transfer){video.colorGamut='rec2020';video.transferFunction=transfer;answerKey='picture'+name+'HDR'+transfer.toUpperCase()+height;caps[answerKey]=false;}
+          if(transfer){video.colorGamut='rec2020';video.transferFunction=transfer;answerKey='picture'+name+'HDR'+transfer.toUpperCase()+height;}
+          if(rate)answerKey+='F'+rate;
+          if(transfer||rate)caps[answerKey]=false;
           try{pending.push(navigator.mediaCapabilities.decodingInfo({type:window.MediaSource?'media-source':'file',video:video}).then(function(answer){caps[answerKey]=answer.supported===true;},function(){}));}catch(e){}
         }
         measure(null);
-        if(name==='HEVC10'){measure('pq');measure('hlg');}
+        measure(null,60);
+        if(name==='HEVC10'){measure('pq');measure('hlg');measure('pq',60);measure('hlg',60);}
       });
     });
     var audio={AAC:'mp4a.40.2',MP3:'mp4a.69',AC3:'ac-3',EC3:'ec-3',TrueHD:'mlpa',DTS:'dtsc',FLAC:'flac',Opus:'opus'};
