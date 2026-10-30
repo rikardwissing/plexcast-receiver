@@ -47,4 +47,71 @@
     function finish(){done(caps);}
     if(pending.length&&typeof Promise!=='undefined')Promise.all(pending).then(finish);else finish();
   };
+  var PACKER_FAMILIES={avc1:'h264',avc3:'h264',hvc1:'hevc',hev1:'hevc',mp4a:'aac','ac-3':'ac3','ec-3':'eac3'};
+  window.PortageCanPlayAnswer=function(v,msg,done,mediaSourceOnly){
+    var MS=window.MediaSource, mc=navigator.mediaCapabilities, nativeHls=false;
+    try{nativeHls=!mediaSourceOnly&&!!v.canPlayType('application/vnd.apple.mpegurl');}catch(e){}
+    function plain(config){
+      var mime=config.mime||(config.kind==='audio'?'audio/mp4':'video/mp4');
+      return config.codecs?mime+'; codecs="'+config.codecs+'"':mime;
+    }
+    // No eotf: the 2017 LG says no to every type that carries it.
+    function sized(config){
+      var type=plain(config);
+      if(config.kind==='video')['width','height','framerate'].forEach(function(key){if(config[key])type+='; '+key+'='+config[key];});
+      return type;
+    }
+    function mse(type){try{return !!MS&&MS.isTypeSupported(type);}catch(e){return false;}}
+    function native(type){try{return v.canPlayType(type)!=='';}catch(e){return false;}}
+    function screen(query){try{return !!window.matchMedia&&window.matchMedia(query).matches;}catch(e){return false;}}
+    var probe={kind:'video',codecs:'avc1.42E01E',width:640,height:360,framerate:30};
+    var takesSize=mse(sized(probe))||!mse(plain(probe));
+    var configs=msg.configs||[], pending=0, sent=false;
+    var answers=configs.map(function(config){
+      var type=plain(config), yes=mse(type)&&(!takesSize||mse(sized(config)));
+      return {mse:yes,display:yes||nativeHls&&native(type)};
+    });
+    function packs(codec){
+      var family=PACKER_FAMILIES[String(codec).split('.')[0].toLowerCase()];
+      if(!family||typeof Fmp4Muxer==='undefined')return false;
+      return Object.keys(Fmp4Muxer.packagedCodecs).some(function(id){return Fmp4Muxer.packagedCodecs[id]===family;});
+    }
+    var containers=(msg.containers||[]).map(function(container){
+      var codecs=String(container.codecs||'').split(',').map(function(c){return c.replace(/^\s+|\s+$/g,'');}).filter(function(c){return !!c;});
+      var type=codecs.length?container.mime+'; codecs="'+codecs.join(',')+'"':container.mime, says='';
+      try{says=v.canPlayType(type)||'';}catch(e){}
+      return {canPlayType:says,display:!mediaSourceOnly&&says!=='',
+              packs:container.mime==='video/x-matroska'&&!!MS&&typeof MkvEngine!=='undefined'&&codecs.length>0&&codecs.every(packs)};
+    });
+    var hdr=screen('(dynamic-range: high)');
+    function reply(){
+      if(sent)return; sent=true;
+      done({type:'canPlayAnswer',id:msg.id,answers:answers,containers:containers,device:{IS_HDR_SUPPORTED:hdr,IS_DV_SUPPORTED:hdr}});
+    }
+    function settle(){pending--; if(pending<=0)reply();}
+    function decoding(config,i){
+      var info={type:MS?'media-source':'file'};
+      if(config.kind==='video'){
+        info.video={contentType:plain(config),width:config.width||1920,height:config.height||1080,
+                    bitrate:config.bitrate||1000000,framerate:config.framerate||30};
+        if(config.hdr){info.video.colorGamut='rec2020';info.video.transferFunction=config.hdr;}
+      }else{
+        info.audio={contentType:plain(config)};
+        if(config.channels)info.audio.channels=String(config.channels);
+      }
+      pending++;
+      try{
+        mc.decodingInfo(info).then(function(result){
+          if(!result||result.supported!==true){answers[i].mse=false;answers[i].display=false;}
+          settle();
+        },settle);
+      }catch(e){settle();}
+    }
+    if(mc&&typeof mc.decodingInfo==='function'&&typeof Promise!=='undefined'){
+      pending++;
+      configs.forEach(function(config,i){if(answers[i].display)decoding(config,i);});
+      setTimeout(reply,1500);
+      settle();
+    }else reply();
+  };
 })();
