@@ -2526,6 +2526,7 @@
         getTime: function () { return v.currentTime || 0; },
         seekTo: function (s) { try { v.currentTime = s; } catch (e) {} },
         log: trace,
+        videoCodec: m.videoCodec,
         startAt: startTime
       }));
       v.src = engine.objectUrl;
@@ -2576,6 +2577,7 @@
         getTime: function () { return v.currentTime || 0; },
         seekTo: function (s) { try { v.currentTime = s; } catch (e) {} },
         log: trace,
+        videoCodec: m.videoCodec,
         startAt: startTime,
         fetcher: function (start, end, signal) {
           return new Promise(function (resolve, reject) {
@@ -2615,6 +2617,7 @@
       setStatus("Buffering…", "Streaming over the connection");
       teardownEngine();
       engine = new window.MseEngine(m.url, m.audioTypeIndex || 0, channelFetcher);
+      if (typeof m.videoCodec === "string") engine.videoCodec = m.videoCodec;
       // Where the moov is and how big it is, when the sender knows. Set before
       // v.src, because that assignment is what eventually fires sourceopen and
       // starts the first fetch. Absent (an older sender, or an HLS package) the

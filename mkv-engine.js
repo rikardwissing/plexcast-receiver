@@ -493,7 +493,19 @@ Fmp4Muxer.packagedCodecs = {
   'V_MPEG4/ISO/AVC': 'h264', 'V_MPEGH/ISO/HEVC': 'hevc', A_AAC: 'aac', A_AC3: 'ac3', A_EAC3: 'eac3',
 };
 
+Fmp4Muxer.codecFamily = function (codec) {
+  var fourcc = String(codec || '').slice(0, 4).toLowerCase();
+  return { avc1: 'avc', avc3: 'avc', hvc1: 'hevc', hev1: 'hevc' }[fourcc] || fourcc;
+};
+
 Fmp4Muxer.prototype.codecString = function () {
+  var own = this.ownCodecString_();
+  if (own && this.declared && this.track.type === 1 &&
+      Fmp4Muxer.codecFamily(this.declared) === Fmp4Muxer.codecFamily(own)) return this.declared;
+  return own;
+};
+
+Fmp4Muxer.prototype.ownCodecString_ = function () {
   var cp = this.track.codecPrivate;
   var id = this.track.codecId;
   if (!Fmp4Muxer.packagedCodecs[id]) return null;
@@ -778,8 +790,32 @@ function MkvTrackTimeline(track, timescale) {
   }
   this.nextDts = null;
   this.prevPts = null;
+  this.pairOpen = false;
+  this.settled = false;
 }
-MkvTrackTimeline.prototype.reset = function () { this.nextDts = null; this.prevPts = null; };
+MkvTrackTimeline.prototype.reset = function () {
+  this.nextDts = null; this.prevPts = null; this.pairOpen = false; this.settled = false;
+};
+MkvTrackTimeline.prototype.settle = function (samples) {
+  if (this.settled || !samples.length) return;
+  this.settled = true;
+  var late = 0;
+  for (var i = 0; i < samples.length; i++) late = Math.max(late, samples[i].dts - samples[i].pts);
+  var shift = Math.min(late, samples[0].dts);
+  if (shift <= 0) return;
+  for (var j = 0; j < samples.length; j++) samples[j].dts -= shift;
+  this.nextDts -= shift;
+};
+MkvTrackTimeline.prototype.isSecondField = function (raw) {
+  if (this.track.type !== 1 || !this.frameTicks) return false;
+  if (this.prevPts == null) { this.pairOpen = true; return false; }
+  var pts = Math.round(raw.ptsMs * this.timescale / 1000);
+  var half = this.frameTicks / 2;
+  var second = this.pairOpen && !raw.keyframe && Math.abs(pts - this.prevPts - half) <= Math.max(1, this.timescale / 1000);
+  this.pairOpen = !second;
+  if (second) this.prevPts = pts;
+  return second;
+};
 MkvTrackTimeline.prototype.convert = function (raw) {
   var pts = Math.round(raw.ptsMs * this.timescale / 1000);
   var dur = this.frameTicks;
@@ -821,6 +857,7 @@ function MkvEngine(url, audioTypeIndex, opts) {
   this.url = url;
   this.audioTypeIndex = audioTypeIndex || 0;
   this.totalBytes = opts.totalBytes || null;
+  this.videoCodec = typeof opts.videoCodec === 'string' ? opts.videoCodec : null;
   this.customFetcher_ = !!opts.fetcher;
   this.sizeProbe_ = null;
   this.landKeyMs_ = null;
@@ -1241,12 +1278,18 @@ MkvEngine.prototype.pumpFrom_ = function (ms) {
 // The codec string a track would mux to, or its raw codecId when unknown.
 MkvEngine.prototype.trackCodec_ = function (track) {
   var timescale = track.type === 1 ? 90000 : Math.round(track.audio.sampleRate);
-  return new Fmp4Muxer(track, timescale).codecString() || track.codecId;
+  return this.muxer_(track, timescale).codecString() || track.codecId;
+};
+
+MkvEngine.prototype.muxer_ = function (track, timescale) {
+  var muxer = new Fmp4Muxer(track, timescale);
+  muxer.declared = this.videoCodec;
+  return muxer;
 };
 
 MkvEngine.prototype.trackSupported_ = function (track) {
   var timescale = track.type === 1 ? 90000 : Math.round(track.audio.sampleRate);
-  var muxer = new Fmp4Muxer(track, timescale);
+  var muxer = this.muxer_(track, timescale);
   return !!muxer.codecString() && MediaSource.isTypeSupported(muxer.contentType());
 };
 
@@ -1338,7 +1381,7 @@ MkvEngine.prototype.openLanes_ = function () {
     for (i = 0; i < chosen.length; i++) {
       var track = chosen[i];
       var timescale = track.type === 1 ? 90000 : Math.round(track.audio.sampleRate);
-      var muxer = new Fmp4Muxer(track, timescale);
+      var muxer = this.muxer_(track, timescale);
       var mime = muxer.contentType();
       var sb = this.mediaSource.addSourceBuffer(mime);
       var lane = { muxer: muxer, timeline: new MkvTrackTimeline(track, timescale),
@@ -1440,6 +1483,7 @@ MkvEngine.prototype.staleRanges_ = function (lane, now) {
 
 MkvEngine.prototype.flushLane_ = function (lane) {
   if (!lane.pending.length) return;
+  if (lane.track.type === 1) lane.timeline.settle(lane.pending);
   lane.queue.push(lane.muxer.fragment(lane.pending));
   lane.pending = [];
   lane.pendingSinceMs = null;
@@ -1476,7 +1520,6 @@ MkvEngine.prototype.isBuffered_ = function (seconds) {
 MkvEngine.prototype.stallCheck_ = function () {
   if (this.dead) return;
   var t = this.getTime() || 0;
-  if (t <= 0) return;
   var durSec = this.demux.durationMs() / 1000;
   if (durSec && t + 1 >= durSec) return;         // the end is not a gap
   // The PLAYHEAD itself, not a point ahead of it: checking t+0.3 read the
@@ -1500,6 +1543,7 @@ MkvEngine.prototype.stallCheck_ = function () {
       return;
     }
   }
+  if (t <= 0) return;
   if (this.inflightAbort) return;                // pump is actively fetching
   if (Date.now() - this.lastFetchDoneAt < 3000) return;  // …or just was
   this.log('mkvengine: gap at ' + Math.round(t) + 's — repump');
@@ -1705,6 +1749,14 @@ MkvEngine.prototype.pump_ = function (startOffset, landMs) {
       lane.initBytes = lane.muxer.initSegment(self.demux.durationMs());
       lane.queue.unshift(lane.initBytes);
       lane.initSent = true;
+    }
+    if (isVideo && lane.timeline.isSecondField(raw) && lane.pending.length) {
+      var first = lane.pending[lane.pending.length - 1];
+      var pair = new Uint8Array(first.data.length + raw.data.length);
+      pair.set(first.data, 0);
+      pair.set(raw.data, first.data.length);
+      first.data = pair;
+      return;
     }
     var sample = lane.timeline.convert(raw);
     lane.pending.push(sample);
