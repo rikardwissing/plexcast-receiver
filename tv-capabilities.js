@@ -40,6 +40,7 @@
     });
     var audio={AAC:'mp4a.40.2',MP3:'mp4a.69',AC3:'ac-3',EC3:'ec-3',TrueHD:'mlpa',DTS:'dtsc',FLAC:'flac',Opus:'opus'};
     Object.keys(audio).forEach(function(name){caps['audio'+name]=support('audio/mp4; codecs="'+audio[name]+'"');});
+    try{caps.audioMPEG=!!window.MediaSource&&window.MediaSource.isTypeSupported('audio/mpeg');}catch(e){caps.audioMPEG=false;}
     if(typeof Fmp4Muxer!=='undefined')Object.keys(Fmp4Muxer.packagedCodecs).forEach(function(id){caps['mkv'+Fmp4Muxer.packagedCodecs[id].toUpperCase()]=true;});
     caps.videoHEVC=caps.videoHEVC10||caps.videoHEVC8;
     // Native container support is a separate question from decode support.
@@ -47,13 +48,12 @@
     function finish(){done(caps);}
     if(pending.length&&typeof Promise!=='undefined')Promise.all(pending).then(finish);else finish();
   };
-  var PACKER_FAMILIES={avc1:'h264',avc3:'h264',hvc1:'hevc',hev1:'hevc',mp4a:'aac','ac-3':'ac3','ec-3':'eac3'};
   window.PortageCanPlayAnswer=function(v,msg,done,mediaSourceOnly){
     var MS=window.MediaSource, mc=navigator.mediaCapabilities, nativeHls=false;
     try{nativeHls=!mediaSourceOnly&&!!v.canPlayType('application/vnd.apple.mpegurl');}catch(e){}
     function plain(config){
       var mime=config.mime||(config.kind==='audio'?'audio/mp4':'video/mp4');
-      return config.codecs?mime+'; codecs="'+config.codecs+'"':mime;
+      return config.codecs&&mime!=='audio/mpeg'?mime+'; codecs="'+config.codecs+'"':mime;
     }
     // No eotf: the 2017 LG says no to every type that carries it.
     function sized(config){
@@ -71,11 +71,7 @@
       var type=plain(config), yes=mse(type)&&(!takesSize||mse(sized(config)));
       return {mse:yes,display:yes||nativeHls&&native(type)};
     });
-    function packs(codec){
-      var family=PACKER_FAMILIES[String(codec).split('.')[0].toLowerCase()];
-      if(!family||typeof Fmp4Muxer==='undefined')return false;
-      return Object.keys(Fmp4Muxer.packagedCodecs).some(function(id){return Fmp4Muxer.packagedCodecs[id]===family;});
-    }
+    function packs(codec){return typeof Fmp4Muxer!=='undefined'&&typeof Fmp4Muxer.carries==='function'&&Fmp4Muxer.carries(codec);}
     var containers=(msg.containers||[]).map(function(container){
       var codecs=String(container.codecs||'').split(',').map(function(c){return c.replace(/^\s+|\s+$/g,'');}).filter(function(c){return !!c;});
       var type=codecs.length?container.mime+'; codecs="'+codecs.join(',')+'"':container.mime, says='';
