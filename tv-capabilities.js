@@ -1,5 +1,70 @@
 /* Shared by /tv and the hosted WebRTC viewer: strict ES5, a 2017 TV must parse it. */
 (function(){
+  var mpegResult=null, mpegWaiters=[];
+  function mpegFrames(startSeconds){
+    var muxer=new Fmp4Muxer({type:2,codecId:'A_MPEG/L3',codecDelayNs:23020833,audio:{sampleRate:48000,channels:1}},48000);
+    var samples=[], i, frame;
+    for(i=0;i<20;i++){
+      frame=new Uint8Array(96); frame[0]=0xFF; frame[1]=0xFB; frame[2]=0x14; frame[3]=0xC0;
+      samples.push({pts:startSeconds*48000+i*1152,data:frame});
+    }
+    return muxer.fragment(samples);
+  }
+  function mpegAppend(startSeconds,withOffset,done){
+    var MS=window.MediaSource, finished=false, el=null, url='', timer=null;
+    function end(ok,why){
+      if(finished)return; finished=true; if(timer)clearTimeout(timer);
+      try{el.removeAttribute('src');el.load();}catch(e){}
+      try{if(url)URL.revokeObjectURL(url);}catch(e){}
+      done(ok,why);
+    }
+    try{
+      if(!MS||typeof Fmp4Muxer==='undefined'||!MS.isTypeSupported('audio/mpeg')){end(false,'not offered');return;}
+      var ms=new MS(), frames=mpegFrames(startSeconds);
+      el=document.createElement('audio'); el.muted=true;
+      el.addEventListener('error',function(){end(false,'element error '+(el.error&&el.error.code));});
+      ms.addEventListener('sourceopen',function(){
+        try{
+          var sb=ms.addSourceBuffer('audio/mpeg');
+          sb.addEventListener('error',function(){end(false,'append error');});
+          sb.addEventListener('updateend',function(){
+            setTimeout(function(){
+              try{
+                var b=sb.buffered;
+                if(el.error)end(false,'element error '+el.error.code);
+                else if(!b.length||b.end(b.length-1)<=0)end(false,'nothing buffered');
+                else if(el.readyState<1)end(false,'no metadata');
+                else end(true,'buffered to '+b.end(b.length-1).toFixed(2)+' s');
+              }catch(e){end(false,String(e&&e.name||e));}
+            },300);
+          });
+          if(withOffset)sb.timestampOffset=frames.timestampOffset;
+          sb.appendBuffer(frames);
+        }catch(e){end(false,String(e&&e.name||e));}
+      });
+      url=URL.createObjectURL(ms); el.src=url;
+      timer=setTimeout(function(){end(false,'timeout');},1200);
+    }catch(e){end(false,String(e&&e.name||e));}
+  }
+  window.PortageMpegTrial=function(done){
+    if(mpegResult){done(mpegResult);return;}
+    mpegWaiters.push(done);
+    if(mpegWaiters.length>1)return;
+    var settle=function(result){
+      mpegResult=result;
+      var waiting=mpegWaiters; mpegWaiters=[];
+      waiting.forEach(function(w){w(result);});
+    };
+    mpegAppend(0,true,function(ok,why){
+      if(ok||why==='not offered'){settle({ok:ok,detail:'MP3 trial: '+(ok?'plays':'no')+' ('+why+')'});return;}
+      mpegAppend(10,true,function(laterOk,laterWhy){
+        mpegAppend(0,false,function(plainOk,plainWhy){
+          settle({ok:false,detail:'MP3 trial: no with the lane\u2019s offset at the start ('+why+'); at 10 s '+
+            (laterOk?'plays':'no ('+laterWhy+')')+'; without an offset '+(plainOk?'plays':'no ('+plainWhy+')')});
+        });
+      });
+    });
+  };
   window.PortageBrowserCapabilities=function(v,done,mediaSourceOnly){
     var caps={mse:!!window.MediaSource,mp4box:typeof MP4Box!=='undefined'}, pending=[];
     var nativeHls=!mediaSourceOnly&&!!v.canPlayType('application/vnd.apple.mpegurl');
@@ -45,8 +110,10 @@
     caps.videoHEVC=caps.videoHEVC10||caps.videoHEVC8;
     // Native container support is a separate question from decode support.
     ['H264','HEVC'].forEach(function(name){caps['containerTS'+name]=!mediaSourceOnly&&!!v.canPlayType('video/mp2t; codecs="'+(name==='H264'?formats.H264:formats.HEVC8)+'"');});
-    function finish(){done(caps);}
-    if(pending.length&&typeof Promise!=='undefined')Promise.all(pending).then(finish);else finish();
+    var measured=false, tried=false;
+    function finish(){if(measured&&tried)done(caps);}
+    window.PortageMpegTrial(function(result){caps.audioMPEG=caps.audioMPEG&&result.ok;tried=true;finish();});
+    if(pending.length&&typeof Promise!=='undefined')Promise.all(pending).then(function(){measured=true;finish();});else{measured=true;finish();}
   };
   window.PortageCanPlayAnswer=function(v,msg,done,mediaSourceOnly){
     var MS=window.MediaSource, mc=navigator.mediaCapabilities, nativeHls=false;
@@ -103,11 +170,20 @@
         },settle);
       }catch(e){settle();}
     }
-    if(mc&&typeof mc.decodingInfo==='function'&&typeof Promise!=='undefined'){
-      pending++;
-      configs.forEach(function(config,i){if(answers[i].display)decoding(config,i);});
-      setTimeout(reply,1500);
-      settle();
-    }else reply();
+    function measure(){
+      if(mc&&typeof mc.decodingInfo==='function'&&typeof Promise!=='undefined'){
+        pending++;
+        configs.forEach(function(config,i){if(answers[i].display)decoding(config,i);});
+        setTimeout(reply,1500);
+        settle();
+      }else reply();
+    }
+    var mpegAsks=[];
+    configs.forEach(function(config,i){if(plain(config)==='audio/mpeg'&&answers[i].display)mpegAsks.push(i);});
+    if(!mpegAsks.length||typeof window.PortageMpegTrial!=='function'){measure();return;}
+    window.PortageMpegTrial(function(result){
+      if(!result.ok)mpegAsks.forEach(function(i){answers[i].mse=false;answers[i].display=false;});
+      measure();
+    });
   };
 })();
